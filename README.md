@@ -22,14 +22,25 @@ students can use in an isolated virtual-machine lab to:
 - Exercise and benchmark **detection rules** against realistic (but controlled) file-based
   indicators.
 
-The GUI is a Tkinter-based builder suite with four tabs:
+The GUI is a Tkinter-based builder suite with nine tabs:
 
-| Tab | Purpose |
-|-----|---------|
-| **Dropper Gen** | Compiles a PS-downloader stub into a standalone `.exe` |
-| **SFX Builder** | Bundles a payload + image decoy into a single `.exe` |
-| **Obfuscator** | Wraps an existing `.exe` with a simple byte-shift cipher |
-| **PDF Dropper** | Bundles a payload + PDF decoy into a single `.exe` |
+| Tab | MITRE Technique | Purpose |
+|-----|----------------|---------|
+| **Dropper Gen** | T1059.001 · T1105 | Compiles a PS-downloader stub into a standalone `.exe` |
+| **SFX Builder** | T1036.007 | Bundles a payload + image decoy into a single `.exe` |
+| **Obfuscator** | T1027 | Wraps an existing `.exe` with a simple byte-shift cipher |
+| **PDF Dropper** | T1036.007 | Bundles a payload + PDF decoy into a single `.exe` |
+| **Reg Persist** | T1547.001 | Simulates HKCU Run key persistence; optional auto-cleanup |
+| **Sched Task** | T1053.005 | Simulates scheduled task creation (ONLOGON/DAILY); optional auto-cleanup |
+| **Startup Folder** | T1547.001 | Simulates copying payload to the Startup folder; optional auto-cleanup |
+| **UAC Bypass** | T1548.002 | Simulates the fodhelper registry hijack technique; optional auto-cleanup |
+| **CMD Dropper** | T1059.003 | Simulates certutil + bitsadmin LOLBAS download technique (display-only) |
+
+Each simulation tab generates a PyInstaller-compiled `.exe` that, when run inside
+the lab VM, performs the persistence/delivery action and immediately pops a
+**Simulation Report** popup showing exactly what was written or registered.
+An optional **cleanup** checkbox (on by default) undoes the action automatically
+so no unwanted artefacts survive the lab session.
 
 ---
 
@@ -38,7 +49,8 @@ The GUI is a Tkinter-based builder suite with four tabs:
 This project intentionally **does not** aim to:
 
 - Improve real-world stealth, evasion, or AV-bypass effectiveness.
-- Implement persistence mechanisms or privilege escalation.
+- Implement uncontrolled persistence (all persistence simulations include
+  an optional auto-cleanup step and a visible report popup).
 - Support network propagation or C2 communication.
 - Provide guidance on weaponizing artefacts outside an authorized lab.
 
@@ -113,14 +125,17 @@ pytest tests/ -v
 
 ```
 FUDMal/
-├── main.py          # Unified GUI entry-point (4 tabs)
+├── main.py          # Unified GUI entry-point (9 tabs)
 ├── dropper.py       # Stand-alone Dropper Gen GUI (legacy)
 ├── SFX.py           # Stand-alone SFX Builder GUI (legacy)
 ├── obfus.py         # Stand-alone Obfuscator GUI (legacy)
 ├── pdf.py           # Stand-alone PDF Dropper GUI (legacy)
 ├── fudmal/
 │   └── manifest.py  # Run-artefact / manifest logging helper
-├── tests/           # pytest test suite
+├── tests/
+│   ├── test_cipher.py   # Cipher algorithm tests
+│   ├── test_logic.py    # Logic class & generated-script tests
+│   └── test_manifest.py # Manifest helper tests
 ├── docs/
 │   └── ROADMAP.md   # Prioritised enhancement roadmap
 ├── pyproject.toml   # Packaging + tooling configuration

