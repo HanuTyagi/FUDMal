@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+.installed.cfg
+pip-log.txt
+pip-delete-this-directory.txt
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# PyInstaller artefacts
+*.spec
+build/
+dist/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Ruff / linting cache
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Run artefacts produced by fudmal/manifest.py  (keep dir, ignore contents)
+runs/
+!runs/.gitkeep
+
+# Temporary loader scripts produced during builds
+temp_loader.py
+temp_loader_script.py
