@@ -78,7 +78,7 @@ def is_running_on_vmware_windows():
 
     # --- Check 3: Process List Artifacts ---
     try:
-        vm_processes = ["vmtoolsd.exe", "VBoxService.exe", "vmacthlp.exe", "VMSrvc.exe"]
+        vm_processes = ["vmtoolsd.exe", "vboxservice.exe", "vmacthlp.exe", "vmsrvc.exe"]
         command = 'tasklist /nh' 
         
         result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=3)
