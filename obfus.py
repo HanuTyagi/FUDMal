@@ -6,6 +6,7 @@ import hashlib
 import base64
 import textwrap
 import shutil
+import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
@@ -258,9 +259,9 @@ class EncoderGUI(tk.Tk):
         # Clear log and start processing
         self.log_text.delete(1.0, tk.END)
         print(f"[{datetime.now().strftime('%H:%M:%S')}] --- Starting Encoding Process ---")
-        
-        # For simplicity, we run it directly. Use threading for a non-blocking GUI.
-        self.process_encoding()
+
+        # Run in a background thread so the GUI stays responsive
+        threading.Thread(target=self.process_encoding, daemon=True).start()
 
     def process_encoding(self):
         original_exe_path = self.exe_path_var.get()
@@ -311,7 +312,7 @@ class EncoderGUI(tk.Tk):
             # C. Compile the Loader Script into an EXE using PyInstaller
             print("\n--- Step C: Compiling Final Executable ---")
             
-            base_name = final_output_name.split(".")[0]
+            base_name = os.path.splitext(final_output_name)[0]
             
             pyinstaller_command = [
                 'pyinstaller',
@@ -346,13 +347,13 @@ class EncoderGUI(tk.Tk):
             # D. Clean up PyInstaller build files (CRITICAL FIX FOR .space FILE)
             
             # Base name for temporary PyInstaller files
-            base_name = final_output_name.split(".")[0]
+            base_name = os.path.splitext(final_output_name)[0]
             
             if os.path.isdir('build'):
                 shutil.rmtree('build')
             
             # Clean up the spec file
-            spec_file_path = f'{base_name}.spec'
+            spec_file_path = final_output_name + '.spec'
             if os.path.exists(spec_file_path):
                 os.remove(spec_file_path)
 

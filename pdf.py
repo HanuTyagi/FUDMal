@@ -19,7 +19,6 @@ class IORedirector:
     def write(self, s):
         self.text_widget.insert(tk.END, s)
         self.text_widget.see(tk.END) # Scroll to the end
-        self.text_widget.update() # Force update
 
     def flush(self):
         pass # Required for file-like objects

