@@ -378,7 +378,7 @@ class EncoderGUI(tk.Tk):
                 shutil.rmtree('build')
             
             # Clean up the spec file
-            spec_file_path = final_output_name + '.spec'
+            spec_file_path = os.path.splitext(final_output_name)[0] + '.spec'
             if os.path.exists(spec_file_path):
                 os.remove(spec_file_path)
 
