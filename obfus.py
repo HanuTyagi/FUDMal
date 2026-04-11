@@ -138,10 +138,37 @@ class IORedirector(io.StringIO):
         self.text_widget = text_widget
 
     def write(self, s):
-        self.text_widget.insert(tk.END, s)
-        self.text_widget.see(tk.END) # Auto-scrolls to the end
+        def _append():
+            self.text_widget.insert(tk.END, s)
+            self.text_widget.see(tk.END)
+
+        try:
+            if threading.current_thread() is threading.main_thread():
+                _append()
+            else:
+                self.text_widget.after(0, _append)
+        except Exception:
+            pass
 
     def flush(self):
+        pass
+
+
+def _ui_notify(root_widget, level, title, message):
+    notifier = messagebox.showerror if level == "error" else messagebox.showinfo
+
+    def _show():
+        notifier(title, message)
+
+    try:
+        if root_widget is None:
+            _show()
+            return
+        if threading.current_thread() is threading.main_thread():
+            _show()
+        else:
+            root_widget.after(0, _show)
+    except Exception:
         pass
 
 # --- GUI Application ---
@@ -325,29 +352,27 @@ class EncoderGUI(tk.Tk):
             
             print(f"1. Running PyInstaller (Output to: {output_dir})...")
             
-            # Suppress PyInstaller's massive output from the Tkinter log
             with contextlib.redirect_stdout(sys.__stdout__), contextlib.redirect_stderr(sys.__stderr__):
-                subprocess.check_call(pyinstaller_command)
+                subprocess.run(pyinstaller_command, check=True, capture_output=True, text=True)
             
             final_exe_path = os.path.join(output_dir, final_output_name)
             
             print("\n--- Process Complete ---")
             print(f"✅ **SUCCESS!** Final Executable created at: {final_exe_path}")
-            messagebox.showinfo("Success", f"Executable successfully created at:\n{final_exe_path}")
+            _ui_notify(self, "info", "Success", f"Executable successfully created at:\n{final_exe_path}")
             
         except subprocess.CalledProcessError as e:
             print(f"\nFATAL ERROR: PyInstaller failed (Exit Code {e.returncode}).")
-            messagebox.showerror("Compilation Error", "PyInstaller failed. Check log for details.")
+            if e.stderr:
+                print(e.stderr[-1000:])
+            _ui_notify(self, "error", "Compilation Error", "PyInstaller failed. Check log for details.")
         
         except Exception as e:
             print(f"\nFATAL ERROR: An unexpected error occurred: {e}")
-            messagebox.showerror("General Error", f"An unexpected error occurred: {e}")
+            _ui_notify(self, "error", "General Error", f"An unexpected error occurred: {e}")
 
         finally:
             # D. Clean up PyInstaller build files (CRITICAL FIX FOR .space FILE)
-            
-            # Base name for temporary PyInstaller files
-            base_name = os.path.splitext(final_output_name)[0]
             
             if os.path.isdir('build'):
                 shutil.rmtree('build')
