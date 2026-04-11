@@ -592,7 +592,11 @@ class TestLogicConfigGenScript:
     """Test the full_script string assembled inside LogicConfigGen.generate."""
 
     def _assemble(self, enable_vm: bool = False) -> str:
-        """Reconstruct full_script without running PyInstaller."""
+        """Reconstruct full_script without running PyInstaller.
+
+        This mirrors LogicConfigGen.generate exactly so that the tests
+        exercise the real production script shape, not a stale variant.
+        """
         import textwrap as tw
 
         ps_content = _main.PS_TEMPLATE.format(
@@ -602,26 +606,23 @@ class TestLogicConfigGenScript:
             DELAY_START=3,
             DELAY_WAIT=5,
         )
-        # Pre-compute to avoid backslash-in-f-string (not valid in Python 3.10)
-        escaped_ps = ps_content.replace("'", "\\'")
 
         if enable_vm:
             core_logic = tw.dedent("""\
 if is_running_on_vmware_windows():
     sys.exit(0)
 else:
-    execute_powershell_script(PS_SCRIPT_CONTENT, EXECUTION_DELAY)
+    execute_powershell_script(PS_SCRIPT_CONTENT)
 """)
         else:
-            core_logic = "execute_powershell_script(PS_SCRIPT_CONTENT, EXECUTION_DELAY)\n"
+            core_logic = "execute_powershell_script(PS_SCRIPT_CONTENT)\n"
 
         full_script = tw.dedent(f"""
 {_main.VM_CHECK_CODE}
 {_main.PS_EXEC_FUNCTION}
 
 # --- TEMPLATE VARIABLES ---
-PS_SCRIPT_CONTENT = '''{escaped_ps}'''
-EXECUTION_DELAY = 3
+PS_SCRIPT_CONTENT = {ps_content!r}
 
 if __name__ == "__main__":
     if platform.system() == "Windows":
