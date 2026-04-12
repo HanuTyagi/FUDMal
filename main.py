@@ -462,10 +462,9 @@ class LogicObfuscator:
             
             vm_code = VM_CHECK_CODE if enable_vm else ""
             vm_call = "    if is_running_on_vmware_windows(): return" if enable_vm else ""
-            _winreg_import = ", winreg" if enable_vm else ""
 
             loader_code = textwrap.dedent(f"""
-import os, sys, subprocess, tempfile, hashlib, base64, platform{_winreg_import}
+import os, sys, subprocess, tempfile, hashlib, base64, platform
 {vm_code}
 
 def generate_key_values(version_key):

@@ -682,7 +682,7 @@ class TestLogicObfuscatorLoaderScript:
         import textwrap as tw
 
         return tw.dedent(f"""
-import os, sys, subprocess, tempfile, hashlib, base64, platform, winreg
+import os, sys, subprocess, tempfile, hashlib, base64, platform
 {vm_code}
 
 def generate_key_values(version_key):
@@ -720,9 +720,7 @@ def run():
         temp_dir = tempfile.gettempdir()
         t_path = os.path.join(temp_dir, 'run_' + str(os.getpid()) + '.exe')
         with open(t_path, 'wb') as f: f.write(orig)
-        subprocess.run([t_path] + sys.argv[1:])
-        try: os.remove(t_path)
-        except: pass
+        subprocess.Popen([t_path] + sys.argv[1:])
     except: pass
 
 if __name__ == "__main__":
