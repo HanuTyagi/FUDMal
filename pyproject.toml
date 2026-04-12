@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fudmal"
+version = "0.1.0"
+description = "Adversary-emulation lab toolkit for authorized defensive research and training"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+
+# Minimal runtime: no hard dep on Pillow or PyInstaller so the package can be
+# imported (and tested) on CI without either being installed.
+dependencies = []
+
+[project.optional-dependencies]
+gui   = ["Pillow>=10.0"]
+build = ["pyinstaller>=6.0"]
+dev   = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+fudmal = "fudmal.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fudmal*"]
+
+# ---------------------------------------------------------------------------
+# Ruff – linting + formatting
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py310"
+line-length    = 100
+# Legacy standalone modules are excluded from linting – they will be
+# progressively refactored into fudmal/core/ (see docs/ROADMAP.md).
+exclude = [
+    "main.py",
+    "dropper.py",
+    "SFX.py",
+    "obfus.py",
+    "pdf.py",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line-length is handled by the formatter
+    "B007",  # loop variable not used (common in template code)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Private helpers in manifest.py are tested directly – allow private access
+"tests/test_manifest.py" = ["SIM117"]
+
+[tool.ruff.format]
+quote-style              = "double"
+indent-style             = "space"
+skip-magic-trailing-comma = false
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths    = ["tests"]
+addopts      = "-v --tb=short"

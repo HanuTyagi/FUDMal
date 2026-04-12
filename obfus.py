@@ -6,11 +6,11 @@ import hashlib
 import base64
 import textwrap
 import shutil
+import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 import io
-import contextlib
 
 # --- 1. Dynamic Byte Cipher Core V3 (Enhanced Obfuscation) ---
 
@@ -137,10 +137,37 @@ class IORedirector(io.StringIO):
         self.text_widget = text_widget
 
     def write(self, s):
-        self.text_widget.insert(tk.END, s)
-        self.text_widget.see(tk.END) # Auto-scrolls to the end
+        def _append():
+            self.text_widget.insert(tk.END, s)
+            self.text_widget.see(tk.END)
+
+        try:
+            if threading.current_thread() is threading.main_thread():
+                _append()
+            else:
+                self.text_widget.after(0, _append)
+        except Exception:
+            pass
 
     def flush(self):
+        pass
+
+
+def _ui_notify(root_widget, level, title, message):
+    notifier = messagebox.showerror if level == "error" else messagebox.showinfo
+
+    def _show():
+        notifier(title, message)
+
+    try:
+        if root_widget is None:
+            _show()
+            return
+        if threading.current_thread() is threading.main_thread():
+            _show()
+        else:
+            root_widget.after(0, _show)
+    except Exception:
         pass
 
 # --- GUI Application ---
@@ -258,9 +285,9 @@ class EncoderGUI(tk.Tk):
         # Clear log and start processing
         self.log_text.delete(1.0, tk.END)
         print(f"[{datetime.now().strftime('%H:%M:%S')}] --- Starting Encoding Process ---")
-        
-        # For simplicity, we run it directly. Use threading for a non-blocking GUI.
-        self.process_encoding()
+
+        # Run in a background thread so the GUI stays responsive
+        threading.Thread(target=self.process_encoding, daemon=True).start()
 
     def process_encoding(self):
         original_exe_path = self.exe_path_var.get()
@@ -280,7 +307,8 @@ class EncoderGUI(tk.Tk):
         if not final_output_name.lower().endswith('.exe'):
             final_output_name += '.exe'
         
-        # Define necessary paths
+        # Define necessary paths; initialize base_name early so finally can always reference it
+        base_name = os.path.splitext(final_output_name)[0]
         current_dir = os.path.dirname(os.path.abspath(__file__))
         loader_script_path = os.path.join(current_dir, 'temp_loader_script.py')
         
@@ -311,48 +339,43 @@ class EncoderGUI(tk.Tk):
             # C. Compile the Loader Script into an EXE using PyInstaller
             print("\n--- Step C: Compiling Final Executable ---")
             
-            base_name = final_output_name.split(".")[0]
-            
             pyinstaller_command = [
                 'pyinstaller',
                 '--onefile',
                 '--noconsole',
-                '--name', final_output_name,
+                '--name', base_name,
                 '--distpath', output_dir,
                 loader_script_path
             ]
             
             print(f"1. Running PyInstaller (Output to: {output_dir})...")
             
-            # Suppress PyInstaller's massive output from the Tkinter log
-            with contextlib.redirect_stdout(sys.__stdout__), contextlib.redirect_stderr(sys.__stderr__):
-                subprocess.check_call(pyinstaller_command)
+            subprocess.run(pyinstaller_command, check=True, capture_output=True, text=True)
             
             final_exe_path = os.path.join(output_dir, final_output_name)
             
             print("\n--- Process Complete ---")
             print(f"✅ **SUCCESS!** Final Executable created at: {final_exe_path}")
-            messagebox.showinfo("Success", f"Executable successfully created at:\n{final_exe_path}")
+            _ui_notify(self, "info", "Success", f"Executable successfully created at:\n{final_exe_path}")
             
         except subprocess.CalledProcessError as e:
             print(f"\nFATAL ERROR: PyInstaller failed (Exit Code {e.returncode}).")
-            messagebox.showerror("Compilation Error", "PyInstaller failed. Check log for details.")
+            if e.stderr:
+                print(e.stderr[-1000:])
+            _ui_notify(self, "error", "Compilation Error", "PyInstaller failed. Check log for details.")
         
         except Exception as e:
             print(f"\nFATAL ERROR: An unexpected error occurred: {e}")
-            messagebox.showerror("General Error", f"An unexpected error occurred: {e}")
+            _ui_notify(self, "error", "General Error", f"An unexpected error occurred: {e}")
 
         finally:
             # D. Clean up PyInstaller build files (CRITICAL FIX FOR .space FILE)
-            
-            # Base name for temporary PyInstaller files
-            base_name = final_output_name.split(".")[0]
             
             if os.path.isdir('build'):
                 shutil.rmtree('build')
             
             # Clean up the spec file
-            spec_file_path = f'{base_name}.spec'
+            spec_file_path = os.path.splitext(final_output_name)[0] + '.spec'
             if os.path.exists(spec_file_path):
                 os.remove(spec_file_path)
 

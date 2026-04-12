@@ -1,0 +1,6 @@
+# Runtime dependencies (install with: pip install -r requirements.txt)
+# GUI features require Pillow; building .exe artefacts requires PyInstaller.
+# Both are optional for the test suite and CI.
+
+Pillow>=10.0
+pyinstaller>=6.0
